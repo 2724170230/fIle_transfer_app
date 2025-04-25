@@ -17,6 +17,37 @@ from transfer import TransferManager, TransferTask, FileInfo
 # 配置日志
 logger = logging.getLogger("SendNow.TransferImpl")
 
+def compute_file_hash(file_obj, algorithm='md5', chunk_size=8192):
+    """
+    计算文件的哈希值
+    
+    Args:
+        file_obj: 已打开的文件对象
+        algorithm: 哈希算法，默认md5
+        chunk_size: 读取文件的块大小
+        
+    Returns:
+        str: 十六进制哈希值
+    """
+    hasher = hashlib.new(algorithm)
+    
+    # 保存当前文件位置
+    current_pos = file_obj.tell()
+    
+    # 将文件指针移动到开始
+    file_obj.seek(0)
+    
+    # 计算哈希值
+    chunk = file_obj.read(chunk_size)
+    while chunk:
+        hasher.update(chunk)
+        chunk = file_obj.read(chunk_size)
+    
+    # 恢复文件指针位置
+    file_obj.seek(current_pos)
+    
+    return hasher.hexdigest()
+
 def recv_all(sock: socket.socket, n: int) -> bytes:
     """
     确保从套接字接收指定数量的字节
@@ -626,8 +657,8 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         
         # 设置任务状态为正在接收
         task.status = "receiving"
-        if task.manager:
-            task.manager.update_task_status(task)
+        # 直接更新状态，不调用manager的update_task_status方法
+        task.file_info.status = "receiving"
         
         # 确保目标目录存在
         save_dir = os.path.dirname(task.file_info.save_path)
@@ -724,6 +755,7 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         
         # 更新任务状态为已完成
         task.status = "completed"
+        task.file_info.status = "completed"
         # 确保进度显示为100%
         task.update_progress(expected_size)
         logger.info(f"文件接收任务完成: {task.task_id}, 文件: {task.file_info.file_name}")
@@ -734,16 +766,17 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
     except ConnectionError as e:
         logger.error(f"连接错误: {e}")
         task.status = "failed"
+        task.file_info.status = "failed"
         task.error_message = f"连接错误: {str(e)}"
     except Exception as e:
         logger.error(f"接收文件出错: {e}")
         logger.error(traceback.format_exc())
         task.status = "failed"
+        task.file_info.status = "failed"
         task.error_message = f"接收文件出错: {str(e)}"
     finally:
-        # 更新任务状态
-        if task.manager:
-            task.manager.update_task_status(task)
+        # 不调用不存在的方法，直接更新状态
+        task.file_info.status = task.status
         
         # 如果任务失败且临时文件仍存在，删除它
         if task.status == "failed" and os.path.exists(f"{save_path}.part"):
@@ -772,6 +805,31 @@ def _on_file_error(self, file_info: FileInfo, error_message: str):
     if self.on_transfer_error:
         self.on_transfer_error(file_info, error_message)
 
+def _send_transfer_complete(self, task: TransferTask):
+    """发送传输完成消息给对方"""
+    try:
+        # 构建完成消息
+        complete_message = {
+            "transfer_id": task.task_id,
+            "completed": True,
+            "file_id": task.file_info.file_id,
+            "file_hash": task.file_info.file_hash
+        }
+        
+        # 创建完成消息
+        message = Message(MessageType.COMPLETE, complete_message)
+        
+        # 尝试发送
+        if task.device:
+            self.network_manager.send_message(task.device, message)
+            logger.info(f"已发送传输完成确认消息: {task.file_info.file_name}")
+        else:
+            logger.warning(f"无法发送完成消息：设备信息缺失")
+            
+    except Exception as e:
+        logger.error(f"发送完成消息失败: {e}")
+        # 这不影响本地文件的完成状态
+
 # 将方法添加到 TransferManager 类
 setattr(TransferManager, "_transfer_server_loop", _transfer_server_loop)
 setattr(TransferManager, "_handle_client_connection", _handle_client_connection)
@@ -785,4 +843,5 @@ setattr(TransferManager, "_send_file", _send_file)
 setattr(TransferManager, "_receive_file", _receive_file)
 setattr(TransferManager, "_on_file_progress", _on_file_progress)
 setattr(TransferManager, "_on_file_complete", _on_file_complete)
-setattr(TransferManager, "_on_file_error", _on_file_error) 
+setattr(TransferManager, "_on_file_error", _on_file_error)
+setattr(TransferManager, "_send_transfer_complete", _send_transfer_complete) 
