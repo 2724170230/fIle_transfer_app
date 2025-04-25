@@ -304,11 +304,12 @@ class TransferTask:
 class TransferManager:
     """传输管理器，处理文件传输任务"""
     
-    def __init__(self, network_manager: NetworkManager):
+    def __init__(self, network_manager: NetworkManager, default_save_dir: str = None):
         """初始化传输管理器
         
         Args:
             network_manager: 网络管理器实例
+            default_save_dir: 默认文件保存目录，如果不提供则使用~/Downloads
         """
         self.network_manager = network_manager
         
@@ -340,9 +341,10 @@ class TransferManager:
         self.on_transfer_complete = None    # 传输完成时回调
         self.on_transfer_error = None       # 传输错误时回调
         self.on_progress_update = None      # 进度更新回调
+        self.on_file_progress = None        # 与app_controller保持兼容的旧回调函数
         
         # 默认设置
-        self.default_save_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+        self.default_save_dir = default_save_dir or os.path.join(os.path.expanduser("~"), "Downloads")
         
         # 注册网络消息处理器
         if network_manager:
@@ -351,7 +353,7 @@ class TransferManager:
         # 创建默认保存目录
         os.makedirs(self.default_save_dir, exist_ok=True)
         
-        logger.info("传输管理器初始化完成")
+        logger.info(f"传输管理器初始化完成，默认保存目录: {self.default_save_dir}")
     
     def start(self):
         """启动传输管理器"""
@@ -465,12 +467,12 @@ class TransferManager:
                 
         return transfer_ids
         
-    def accept_transfer(self, transfer_id: str, save_path: str) -> bool:
+    def accept_transfer(self, transfer_id: str, save_path: str = None) -> bool:
         """接受文件传输请求
         
         Args:
             transfer_id: 传输ID
-            save_path: 保存文件的路径
+            save_path: 保存文件的路径，如果不提供则使用默认保存目录
             
         Returns:
             bool: 是否成功发送接受消息
@@ -478,23 +480,41 @@ class TransferManager:
         if transfer_id not in self.pending_transfers:
             logger.error(f"未找到待处理的传输请求: {transfer_id}")
             return False
+        
+        # 使用提供的保存路径或默认路径    
+        actual_save_path = save_path or self.default_save_dir
             
         # 获取请求信息
-        file_info = self.pending_transfers[transfer_id]
+        request_info = self.pending_transfers[transfer_id]
+        if isinstance(request_info, dict):
+            file_info = request_info.get("file_info")
+            sender = request_info.get("sender")
+        else:
+            # 向后兼容，如果直接存储了FileInfo对象
+            file_info = request_info
+            sender = None
+            for device in self.network_manager.get_devices():
+                if device.device_id == file_info.device_id:
+                    sender = device
+                    break
         
+        if not file_info:
+            logger.error(f"无效的传输请求数据: {transfer_id}")
+            return False
+            
         # 设置保存路径
-        file_info.save_path = os.path.join(save_path, file_info.file_name)
+        file_info.save_path = os.path.join(actual_save_path, file_info.file_name)
         
         # 检查目录是否存在，不存在则创建
         os.makedirs(os.path.dirname(file_info.save_path), exist_ok=True)
         
         # 创建任务对象
-        task = self.create_transfer_task(file_info, transfer_id, save_path)
+        task = self.create_transfer_task(file_info, transfer_id, actual_save_path)
         
         # 添加到已接受列表
         self.accepted_transfers[transfer_id] = {
             "file_info": file_info,
-            "save_path": save_path,
+            "save_path": actual_save_path,
             "status": "accepted",
             "timestamp": time.time(),
             "task": task
@@ -510,10 +530,21 @@ class TransferManager:
         }
         
         accept_message = Message(MessageType.TRANSFER_ACCEPT, response_payload)
-        success = self.network_manager.send_message(file_info.device_id, accept_message)
+        
+        if sender:
+            success = self.network_manager.send_message(sender, accept_message)
+        else:
+            logger.warning(f"找不到发送方设备，尝试使用device_id发送: {file_info.device_id}")
+            # 尝试从device_id创建一个临时设备对象
+            temp_device = DeviceInfo(
+                device_id=file_info.device_id,
+                device_name="未知设备",
+                ip_address=file_info.device_id.split('@')[-1] if '@' in file_info.device_id else "0.0.0.0"
+            )
+            success = self.network_manager.send_message(temp_device, accept_message)
         
         if success:
-            logger.info(f"已接受文件传输: {file_info.file_name}, 保存到 {save_path}")
+            logger.info(f"已接受文件传输: {file_info.file_name}, 保存到 {actual_save_path}")
             # 从待处理列表移除
             if transfer_id in self.pending_transfers:
                 del self.pending_transfers[transfer_id]
@@ -699,10 +730,17 @@ class TransferManager:
         return list(self.pending_transfers.values())
         
     def _on_file_progress(self, file_info: FileInfo, progress: float, speed: float):
-        """文件进度回调处理"""
+        """文件进度回调处理
+        
+        同时支持新的on_progress_update和旧的on_file_progress回调接口
+        """
         # 将回调转发到注册的回调函数
         if self.on_progress_update:
             self.on_progress_update(file_info, progress, speed)
+            
+        # 向后兼容旧的回调接口
+        if self.on_file_progress:
+            self.on_file_progress(file_info, progress, speed)
     
     def _on_file_complete(self, file_info: FileInfo, is_sender: bool):
         """文件完成回调处理"""
@@ -768,7 +806,7 @@ class TransferManager:
                 device_id=sender_id,
                 device_name=sender_name,
                 ip_address=addr[0],
-                port=addr[1]
+                port=TRANSFER_PORT
             )
             
             # 提取文件信息
@@ -779,6 +817,10 @@ class TransferManager:
                 
             # 处理每个文件
             for file_data in file_infos_data:
+                # 设置设备ID以便跟踪来源
+                if "device_id" not in file_data:
+                    file_data["device_id"] = sender_id
+                
                 file_info = FileInfo.from_dict(file_data)
                 transfer_id = file_info.transfer_id
                 
@@ -793,10 +835,35 @@ class TransferManager:
                 
                 # 触发回调
                 if self.on_transfer_request:
-                    self.on_transfer_request(file_info, sender_device, transfer_id)
+                    # 检查回调函数期望的参数
+                    import inspect
+                    sig = inspect.signature(self.on_transfer_request)
+                    params = list(sig.parameters.keys())
                     
+                    if len(params) == 3 and params[0] == 'self':
+                        # 新格式: on_transfer_request(self, file_info, sender_device, transfer_id)
+                        self.on_transfer_request(file_info, sender_device, transfer_id)
+                    elif len(params) == 3:
+                        # 新格式: on_transfer_request(file_info, sender_device, transfer_id)
+                        self.on_transfer_request(file_info, sender_device, transfer_id)
+                    elif len(params) == 2 and params[0] == 'self':
+                        # 旧格式: on_transfer_request(self, device, files)
+                        # 我们需要收集所有文件并一次性调用
+                        file_infos = [info["file_info"] for info in self.pending_transfers.values() 
+                                      if isinstance(info, dict) and info.get("sender") == sender_device]
+                        if file_infos:
+                            return self.on_transfer_request(sender_device, file_infos)
+                    elif len(params) == 2:
+                        # 旧格式: on_transfer_request(device, files)
+                        file_infos = [info["file_info"] for info in self.pending_transfers.values() 
+                                      if isinstance(info, dict) and info.get("sender") == sender_device]
+                        if file_infos:
+                            return self.on_transfer_request(sender_device, file_infos)
+                                              
         except Exception as e:
             logger.error(f"处理传输请求出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     def _handle_transfer_accept(self, payload: dict):
         """处理传输接受消息"""
