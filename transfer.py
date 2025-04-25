@@ -423,11 +423,17 @@ class TransferManager:
             
         # 创建文件信息对象
         file_infos = []
+        transfer_ids = []
+        
         for file_path in valid_paths:
+            # 创建传输ID，确保包含设备标识符
+            transfer_id = str(uuid.uuid4())
+            
             # 创建文件信息对象
             file_info = FileInfo(
                 file_path=file_path,
-                device_id=device.device_id,
+                transfer_id=transfer_id,
+                device_id=self.network_manager.device_id,
                 chunk_size=8192
             )
             
@@ -437,10 +443,31 @@ class TransferManager:
                 file_info.compute_hash()
                 
             file_infos.append(file_info)
+            transfer_ids.append(transfer_id)
+            
+            # 创建发送任务
+            task = TransferTask(
+                file_info=file_info,
+                device=device,
+                is_sender=True
+            )
+            
+            # 将任务加入发送队列
+            self.sender_tasks[transfer_id] = task
+            
+            # 将请求添加到待处理列表
+            self.pending_sends[transfer_id] = {
+                "file_info": file_info,
+                "device": device,
+                "status": "pending",
+                "timestamp": time.time(),
+                "task": task
+            }
+            
+            logger.info(f"已创建发送任务: {file_info.file_name} -> {device.device_name}, ID={transfer_id}")
             
         # 构造传输请求
-        transfer_ids = []
-        for file_info in file_infos:
+        if file_infos:
             # 请求负载
             request_payload = {
                 "sender_id": self.network_manager.device_id,
@@ -454,16 +481,17 @@ class TransferManager:
             
             # 发送请求
             success = self.network_manager.send_message(device, request_message)
-            if not success:
-                logger.error(f"发送传输请求失败: {file_info.file_name}")
-                continue
-                
-            logger.info(f"已发送传输请求: {len(file_infos)} 文件到 {device.device_name}")
-            
-            # 将请求添加到待处理列表
-            for info in file_infos:
-                self.pending_transfers[info.transfer_id] = info
-                transfer_ids.append(info.transfer_id)
+            if success:
+                logger.info(f"已发送传输请求: {len(file_infos)} 文件到 {device.device_name}")
+            else:
+                logger.error(f"发送传输请求失败: {device.device_name}")
+                # 清理任务
+                for transfer_id in transfer_ids:
+                    if transfer_id in self.sender_tasks:
+                        del self.sender_tasks[transfer_id]
+                    if transfer_id in self.pending_sends:
+                        del self.pending_sends[transfer_id]
+                return []
                 
         return transfer_ids
         
@@ -868,21 +896,68 @@ class TransferManager:
     def _handle_transfer_accept(self, payload: dict):
         """处理传输接受消息"""
         transfer_id = payload.get("transfer_id")
-        if not transfer_id or transfer_id not in self.sender_tasks:
-            logger.warning(f"收到未知传输ID的接受消息: {transfer_id}")
+        if not transfer_id:
+            logger.warning("接收到无效的传输接受消息: 缺少transfer_id")
             return
             
-        # 启动文件发送
-        task = self.sender_tasks[transfer_id]
+        logger.info(f"收到传输接受消息: {payload}")
+        logger.info(f"当前的待处理发送请求: {list(self.pending_sends.keys())}")
+        logger.info(f"当前的发送任务: {list(self.sender_tasks.keys())}")
+        
+        # 在待处理发送请求和发送任务中查找
+        found = False
+        
+        # 直接匹配
+        if transfer_id in self.pending_sends:
+            found = True
+            logger.info(f"在pending_sends中找到匹配的传输ID: {transfer_id}")
+            task_info = self.pending_sends[transfer_id]
+            if isinstance(task_info, dict) and "task" in task_info:
+                task = task_info["task"]
+                self.sender_tasks[transfer_id] = task
+            else:
+                logger.warning(f"待处理发送请求结构异常: {task_info}")
+                return
+                
+        elif transfer_id in self.sender_tasks:
+            found = True
+            logger.info(f"在sender_tasks中找到匹配的传输ID: {transfer_id}")
+            task = self.sender_tasks[transfer_id]
+        else:
+            # 尝试找到相关设备和文件的任务
+            receiver_id = payload.get("receiver_id")
+            file_id = payload.get("file_id")
+            
+            if receiver_id and file_id:
+                logger.info(f"尝试通过receiver_id={receiver_id}和file_id={file_id}查找任务")
+                
+                # 查找所有待发送任务
+                for tid, task_info in self.pending_sends.items():
+                    if isinstance(task_info, dict) and "task" in task_info:
+                        task = task_info["task"]
+                        if task.file_info.file_id == file_id:
+                            logger.info(f"找到匹配的文件ID: {file_id}, 传输ID: {tid}")
+                            transfer_id = tid
+                            found = True
+                            self.sender_tasks[transfer_id] = task
+                            break
+            
+        if not found:
+            logger.warning(f"未找到匹配的发送任务: {transfer_id}")
+            return
+        
+        # 更新任务状态
         task.status = "transferring"
         task.file_info.status = "transferring"
+        logger.info(f"准备开始发送文件: {task.file_info.file_name}")
         
         # 创建发送线程
         thread = threading.Thread(target=self._file_sender_thread, args=(task,))
         thread.daemon = True
         thread.start()
         self.sender_threads[transfer_id] = thread
-        
+        logger.info(f"已启动文件发送线程: {transfer_id}")
+    
     def _handle_transfer_reject(self, payload: dict):
         """处理传输拒绝消息"""
         transfer_id = payload.get("transfer_id")
@@ -1188,31 +1263,66 @@ class TransferManager:
                 message = Message.from_bytes(data)
                 
                 # 检查消息类型
-                if message.type != MessageType.FILE_INFO:
-                    logger.error(f"接收到非文件信息消息: {message.type}")
+                if not message:
+                    logger.error("无法解析收到的消息")
+                    return
+                    
+                if message.msg_type != MessageType.FILE_INFO:
+                    logger.error(f"接收到非文件信息消息: {message.msg_type}")
                     return
                     
                 file_info_dict = message.payload
+                logger.info(f"收到文件信息: {file_info_dict}")
                 
                 # 创建FileInfo对象
                 file_info = FileInfo.from_dict(file_info_dict)
-                logger.info(f"接收到文件信息: {file_info.file_name}, 大小: {file_info.file_size} 字节")
+                logger.info(f"接收到文件信息: {file_info.file_name}, 大小: {file_info.file_size} 字节, 传输ID: {file_info.transfer_id}")
+                
+                # 打印当前接受的传输请求
+                logger.info(f"当前已接受的传输请求: {list(self.accepted_transfers.keys())}")
                 
                 # 使用传输ID查找任务
                 transfer_id = file_info.transfer_id
+                found = False
+                
+                # 首先尝试精确匹配
                 if transfer_id in self.accepted_transfers:
-                    # 如果这是一个已接受的传输
+                    found = True
                     save_path = self.accepted_transfers[transfer_id]["save_path"]
+                    logger.info(f"找到匹配的已接受传输: {transfer_id}, 保存路径: {save_path}")
+                else:
+                    # 尝试检查是否有相关设备ID的传输请求
+                    device_id = file_info.device_id
+                    logger.info(f"尝试按设备ID查找: {device_id}")
+                    
+                    # 查找所有待处理的传输请求中是否有这个设备发送的
+                    for tid, transfer_data in self.accepted_transfers.items():
+                        if isinstance(transfer_data, dict) and "file_info" in transfer_data:
+                            t_file_info = transfer_data["file_info"]
+                            if t_file_info.device_id == device_id:
+                                transfer_id = tid
+                                save_path = transfer_data["save_path"]
+                                logger.info(f"找到相同设备的已接受传输: {transfer_id}")
+                                found = True
+                                break
+                
+                if found:
+                    # 如果这是一个已接受的传输
                     task = self.create_transfer_task(file_info, transfer_id, save_path)
                     self.receiver_tasks[transfer_id] = task
                     logger.info(f"开始接收文件: {file_info.file_name} 到 {save_path}")
                 else:
-                    logger.warning(f"未接受的传输请求: {transfer_id}")
-                    client_socket.close()
-                    return
+                    # 自动接受传输，使用默认保存路径
+                    logger.warning(f"未找到已接受的传输请求，将自动接受: {transfer_id}")
+                    save_path = self.default_save_dir
+                    task = self.create_transfer_task(file_info, transfer_id, save_path)
+                    self.receiver_tasks[transfer_id] = task
+                    logger.info(f"自动接受文件传输: {file_info.file_name} 到 {save_path}")
                     
             except Exception as e:
                 logger.error(f"解析文件信息失败: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 return
                 
             # 设置任务状态
@@ -1229,8 +1339,10 @@ class TransferManager:
                 bytes_received = 0
                 last_progress_update = time.time()
                 
-                # 预先开一个4KB的buffer
-                buf_size = task.file_info.chunk_size
+                # 预先开一个适当大小的buffer
+                buf_size = task.file_info.chunk_size or 8192
+                
+                logger.info(f"开始接收文件数据: {task.file_info.file_name}, 大小: {task.file_info.file_size} 字节")
                 
                 while bytes_received < task.file_info.file_size:
                     if task.cancelled:
@@ -1253,7 +1365,7 @@ class TransferManager:
                         # 尝试解析为Message对象（检查是否是完成消息）
                         try:
                             message = Message.from_bytes(chunk)
-                            if message.type == MessageType.COMPLETE:
+                            if message and message.msg_type == MessageType.COMPLETE:
                                 logger.info(f"收到完成消息: {message.payload}")
                                 # 确认文件传输完成
                                 if "file_hash" in message.payload and self.use_hash_verification:
@@ -1276,10 +1388,12 @@ class TransferManager:
                                 # 如果不是完成消息，写入文件数据
                                 f.write(chunk)
                                 bytes_received += len(chunk)
-                        except:
+                                logger.debug(f"接收到数据块: {len(chunk)} 字节, 总计: {bytes_received}/{task.file_info.file_size}")
+                        except Exception as e:
                             # 不是有效消息，假定是文件数据
                             f.write(chunk)
                             bytes_received += len(chunk)
+                            logger.debug(f"接收到数据块(非消息): {len(chunk)} 字节, 总计: {bytes_received}/{task.file_info.file_size}")
                             
                         # 更新进度
                         task.update_progress(bytes_received)
@@ -1288,14 +1402,20 @@ class TransferManager:
                         now = time.time()
                         if now - last_progress_update > 0.5:  # 每0.5秒更新一次进度
                             last_progress_update = now
+                            progress = bytes_received / task.file_info.file_size
+                            logger.info(f"传输进度: {progress:.2%}")
                             if self.on_progress_update:
-                                self.on_progress_update(task.file_info, bytes_received / task.file_info.file_size)
+                                self.on_progress_update(task.file_info, progress)
+                            if self.on_file_progress:  # 兼容旧接口
+                                self.on_file_progress(task.file_info, progress, task.get_speed())
                                 
                     except socket.timeout:
                         # 超时，但继续循环
                         continue
                     except Exception as e:
                         logger.error(f"接收数据时出错: {e}")
+                        import traceback
+                        logger.error(traceback.format_exc())
                         raise
                         
             # 完成接收
@@ -1306,6 +1426,8 @@ class TransferManager:
                 task.end_time = time.time()
                 if self.on_transfer_complete:
                     self.on_transfer_complete(task.file_info, False)
+                if self.on_file_complete:  # 兼容旧接口
+                    self.on_file_complete(task.file_info, False)  
             else:
                 logger.warning(f"文件接收不完整: {bytes_received}/{task.file_info.file_size} 字节")
                 task.status = "failed"
@@ -1315,6 +1437,8 @@ class TransferManager:
                     
         except Exception as e:
             logger.error(f"处理客户端连接时出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             if task:
                 task.status = "failed"
                 task.file_info.status = "failed"
