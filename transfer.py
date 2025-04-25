@@ -367,6 +367,10 @@ class TransferManager:
         self.sender_tasks = {}         # 发送任务 {transfer_id: TransferTask}
         self.receiver_tasks = {}       # 接收任务 {transfer_id: TransferTask}
         
+        # 为了兼容性，添加send_tasks和receive_tasks作为别名
+        self.send_tasks = self.sender_tasks     # 与transfer_impl.py保持兼容
+        self.receive_tasks = self.receiver_tasks # 与transfer_impl.py保持兼容
+        
         # 用于发送/接收文件的线程
         self.sender_threads = {}       # 发送线程 {transfer_id: Thread}
         self.receiver_threads = {}     # 接收线程 {transfer_id: Thread}
