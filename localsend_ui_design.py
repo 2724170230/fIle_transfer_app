@@ -1096,6 +1096,11 @@ class SendPanel(QWidget):
         """)
         self.sendButton.setEnabled(False)  # 初始没有文件时禁用
         
+        # 状态标签 - 用于显示选择的设备和传输状态
+        self.statusLabel = QLabel("请选择设备和文件")
+        self.statusLabel.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px;")
+        self.statusLabel.setAlignment(Qt.AlignCenter)
+        
         # 设置底部区域样式
         self.deviceSearchWidget.setStyleSheet(f"""
             background-color: {PANEL_BG};
@@ -1109,6 +1114,7 @@ class SendPanel(QWidget):
         layout.addSpacing(15)
         layout.addWidget(self.deviceSearchWidget)
         layout.addSpacing(10)
+        layout.addWidget(self.statusLabel, 0, Qt.AlignCenter)  # 先添加状态标签
         layout.addWidget(self.sendButton, 0, Qt.AlignCenter)
         
         # 配置拖放功能
@@ -1293,13 +1299,21 @@ class SendPanel(QWidget):
         
         if selectedItem:
             device_id = selectedItem.data(100)
-            self.selectedDeviceLabel.setText(f"已选择: {selectedItem.text()}")
+            # 不再使用selectedDeviceLabel，而是直接更新发送按钮状态
             if hasattr(self, 'sendButton'):
                 self.sendButton.setEnabled(True)
+            
+            # 显示在状态标签中（如果有）
+            if hasattr(self, 'statusLabel'):
+                self.statusLabel.setText(f"已选择: {selectedItem.text()}")
         else:
-            self.selectedDeviceLabel.setText("已选择: 无")
+            # 禁用发送按钮
             if hasattr(self, 'sendButton'):
                 self.sendButton.setEnabled(False)
+            
+            # 显示在状态标签中（如果有）
+            if hasattr(self, 'statusLabel'):
+                self.statusLabel.setText("已选择: 无")
 
     def onTransferProgress(self, file_info, progress, speed):
         """传输进度回调"""
@@ -1335,6 +1349,7 @@ class SendPanel(QWidget):
         # 检查是否有选择的设备
         selected_device = self.deviceList.currentItem()
         if not selected_device:
+            self.statusLabel.setText("请先选择一个设备")
             return
         
         # 获取设备ID
@@ -1346,17 +1361,11 @@ class SendPanel(QWidget):
             file_paths.append(self.fileList.item(i).data(Qt.UserRole))
         
         if not file_paths:
+            self.statusLabel.setText("请先添加要发送的文件")
             return
         
         # 如果AppController可用，使用它发送文件
         if self.app_controller:
-            # 添加状态标签（如果不存在）
-            if not hasattr(self, 'statusLabel'):
-                self.statusLabel = QLabel("准备发送文件...")
-                self.statusLabel.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px;")
-                layout = self.layout()
-                layout.insertWidget(layout.count()-1, self.statusLabel, 0, Qt.AlignCenter)
-            
             # 发送文件
             self.statusLabel.setText("正在发送文件...")
             transfer_ids = self.app_controller.send_files(device_id, file_paths)
@@ -1368,7 +1377,7 @@ class SendPanel(QWidget):
         else:
             # 模拟发送成功
             print(f"模拟发送文件到设备 {device_id}: {file_paths}")
-            # 这里可以添加模拟发送成功的提示
+            self.statusLabel.setText("模拟发送文件（仅测试模式）")
 
     def setAppController(self, controller):
         """设置AppController引用"""
