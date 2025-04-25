@@ -171,7 +171,7 @@ def send_onDeviceFound(self, device):
         
         if not found:
             # 添加新设备，确保显示格式与 DeviceInfo.__str__ 一致
-            item = QListWidgetItem(f"{device.device_name} ({device.device_id}) - {device.ip_address}:{device.port}")
+            item = QListWidgetItem(f"{device.device_name} ({device.device_id})")
             item.setData(100, device.device_id)  # 存储设备ID
             self.deviceList.addItem(item)
             print(f"添加设备: {device.device_name} ({device.device_id}) @ {device.ip_address}")
@@ -315,7 +315,14 @@ def send_sendFilesToDevice(self):
     """发送文件到所选设备"""
     # 检查controller是否存在
     if not hasattr(self, 'controller') or self.controller is None:
-        return
+        # 尝试使用app_controller
+        if hasattr(self, 'app_controller') and self.app_controller is not None:
+            # 如果app_controller可用，将其赋值给controller
+            self.controller = self.app_controller
+            print("从app_controller获取controller")
+        else:
+            print("controller和app_controller都不可用")
+            return
         
     # 获取当前选择的设备
     if not hasattr(self, 'deviceList') or not self.deviceList.currentItem():
@@ -324,6 +331,7 @@ def send_sendFilesToDevice(self):
     
     # 获取选择的设备ID
     device_id = self.deviceList.currentItem().data(100)
+    print(f"[send_sendFilesToDevice] 已选择设备ID: {device_id}")
     
     # 获取需要发送的文件列表
     file_paths = []
@@ -332,10 +340,13 @@ def send_sendFilesToDevice(self):
             item = self.fileList.item(i)
             file_path = item.data(Qt.UserRole)  # 获取文件路径
             file_paths.append(file_path)
+            print(f"[send_sendFilesToDevice] 添加文件: {file_path}")
     
     if not file_paths:
         QMessageBox.warning(self, "发送失败", "请先选择要发送的文件")
         return
+    
+    print(f"[send_sendFilesToDevice] 使用controller发送文件: {self.controller}")
     
     # 开始发送
     transfer_ids = self.controller.send_files(device_id, file_paths)

@@ -1095,6 +1095,7 @@ class SendPanel(QWidget):
             }}
         """)
         self.sendButton.setEnabled(False)  # 初始没有文件时禁用
+        self.sendButton.clicked.connect(self.sendFiles)  # 确保连接到发送方法
         
         # 状态标签 - 用于显示选择的设备和传输状态
         self.statusLabel = QLabel("请选择设备和文件")
@@ -1346,41 +1347,64 @@ class SendPanel(QWidget):
     
     def sendFiles(self):
         """发送文件按钮点击事件"""
+        print("发送按钮被点击")
         # 检查是否有选择的设备
         selected_device = self.deviceList.currentItem()
         if not selected_device:
+            print("没有选择设备")
             self.statusLabel.setText("请先选择一个设备")
             return
         
         # 获取设备ID
         device_id = selected_device.data(100)
+        print(f"已选择设备ID: {device_id}")
+        print(f"设备显示文本: {selected_device.text()}")
         
         # 获取所有待发送文件路径
         file_paths = []
         for i in range(self.fileList.count()):
-            file_paths.append(self.fileList.item(i).data(Qt.UserRole))
+            file_path = self.fileList.item(i).data(Qt.UserRole)
+            file_paths.append(file_path)
+            print(f"添加文件: {file_path}")
         
         if not file_paths:
+            print("没有选择文件")
             self.statusLabel.setText("请先添加要发送的文件")
             return
         
         # 如果AppController可用，使用它发送文件
         if self.app_controller:
+            print(f"使用app_controller发送文件，controller={self.app_controller}")
+            
+            # 检查网络管理器中的可用设备
+            print("可用设备列表:")
+            for device in self.app_controller.get_devices():
+                print(f"  - {device.device_name} ({device.device_id}) @ {device.ip_address}")
+            
+            # 检查控制器中的缓存设备
+            print("控制器缓存的设备:")
+            for id, device in self.app_controller.devices.items():
+                print(f"  - {id}: {device.device_name} @ {device.ip_address}")
+            
             # 发送文件
             self.statusLabel.setText("正在发送文件...")
             transfer_ids = self.app_controller.send_files(device_id, file_paths)
             
             if transfer_ids:
+                print(f"发送成功，传输ID: {transfer_ids}")
                 self.statusLabel.setText(f"已开始发送 {len(transfer_ids)} 个文件...")
             else:
+                print("发送失败，未返回传输ID")
                 self.statusLabel.setText("文件发送失败，请检查网络连接")
         else:
+            print("app_controller不可用，使用模拟模式")
             # 模拟发送成功
             print(f"模拟发送文件到设备 {device_id}: {file_paths}")
             self.statusLabel.setText("模拟发送文件（仅测试模式）")
 
     def setAppController(self, controller):
         """设置AppController引用"""
+        print(f"设置SendPanel的app_controller: {controller}")
         self.app_controller = controller
         
         # 连接设备发现信号
@@ -1390,6 +1414,7 @@ class SendPanel(QWidget):
             
             # 立即填充设备列表
             self.populateDeviceList()
+            print("已完成设备列表初始化")
     
     def refreshDevices(self):
         """刷新附近设备列表"""
@@ -1438,11 +1463,13 @@ class SendPanel(QWidget):
         
         # 创建列表项
         item = QListWidgetItem()
+        # 显示设备名称和ID，不包含IP地址和端口，以匹配AppController.send_files方法中的期望
         item.setText(f"{device.device_name} ({device.device_id})")
         item.setData(100, device.device_id)  # 存储设备ID
         
         # 添加到列表
         self.deviceList.addItem(item)
+        print(f"添加设备到列表: {device.device_name} ({device.device_id})")
     
     def removeDeviceFromList(self, device):
         """从列表中移除设备"""

@@ -109,11 +109,22 @@ class AppController(QObject):
         else:
             # 尝试模糊匹配，去掉可能的前缀（如 "#"）
             clean_id = device_id.lstrip('#')
-            for d in self.get_devices():
+            # 先在缓存的设备中查找
+            for d_id, d in self.devices.items():
                 if d.device_id.lstrip('#') == clean_id:
                     device = d
-                    logger.info(f"找到设备(模糊匹配): {device.device_name} ({device.device_id})")
+                    logger.info(f"找到设备(模糊匹配/缓存): {device.device_name} ({device.device_id})")
                     break
+            
+            # 如果缓存中没找到，尝试直接从网络管理器获取最新设备列表
+            if not device:
+                for d in self.network_manager.get_devices():
+                    if d.device_id.lstrip('#') == clean_id:
+                        device = d
+                        # 更新设备缓存
+                        self.devices[d.device_id] = d
+                        logger.info(f"找到设备(模糊匹配/网络): {device.device_name} ({device.device_id})")
+                        break
         
         if not device:
             logger.error(f"找不到设备: {device_id}")
