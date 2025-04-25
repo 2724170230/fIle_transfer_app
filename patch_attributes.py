@@ -5,7 +5,7 @@
 import logging
 import inspect
 import uuid
-from transfer import TransferManager
+from transfer import TransferManager, FileInfo
 from message import MessageType, Message
 
 logger = logging.getLogger("SendNow.PatchAttributes")
@@ -70,6 +70,24 @@ def patch_transfer_manager(tm):
         
         # 调用原始方法
         return original_handle_transfer_request(payload, addr)
+    
+    # 为FileInfo类添加缺失的get_formatted_size方法
+    def get_formatted_size(self):
+        """返回格式化的文件大小，如1KB, 1MB等"""
+        size = self.file_size
+        if size < 1024:
+            return f"{size:.1f} B"
+        elif size < 1024 * 1024:
+            return f"{size/1024:.1f} KB"
+        elif size < 1024 * 1024 * 1024:
+            return f"{size/(1024*1024):.1f} MB"
+        else:
+            return f"{size/(1024*1024*1024):.1f} GB"
+    
+    # 检查FileInfo类是否已有get_formatted_size方法
+    if not hasattr(FileInfo, "get_formatted_size"):
+        setattr(FileInfo, "get_formatted_size", get_formatted_size)
+        logger.info("为FileInfo类添加了get_formatted_size方法")
     
     # 替换方法
     tm._handle_network_message = wrapped_handle_message

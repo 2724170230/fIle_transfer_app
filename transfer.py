@@ -45,6 +45,18 @@ class FileInfo:
                 logger.error(f"获取文件大小失败: {e}")
                 self.file_size = 0
     
+    def get_formatted_size(self) -> str:
+        """返回格式化的文件大小，如1KB, 1MB等"""
+        size = self.file_size
+        if size < 1024:
+            return f"{size:.1f} B"
+        elif size < 1024 * 1024:
+            return f"{size/1024:.1f} KB"
+        elif size < 1024 * 1024 * 1024:
+            return f"{size/(1024*1024):.1f} MB"
+        else:
+            return f"{size/(1024*1024*1024):.1f} GB"
+    
     def _get_mime_type(self) -> str:
         """获取文件的MIME类型"""
         try:
