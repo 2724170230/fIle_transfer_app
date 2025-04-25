@@ -30,6 +30,10 @@ def receive_onDeviceLost(self, device):
 
 def receive_onTransferRequest(self, device, files):
     """传输请求回调"""
+    # 检查controller是否存在
+    if not hasattr(self, 'controller') or self.controller is None:
+        return
+        
     if not files:
         return
     
@@ -62,6 +66,10 @@ def receive_onTransferRequest(self, device, files):
 
 def receive_onTransferProgress(self, file_info, progress, speed):
     """传输进度回调"""
+    # 检查controller是否存在
+    if not hasattr(self, 'controller') or self.controller is None:
+        return
+        
     # 只处理接收文件
     if file_info.transfer_id not in self.controller.get_receive_tasks():
         return
@@ -108,6 +116,10 @@ def receive_onTransferComplete(self, file_info, is_sender):
 
 def receive_onTransferError(self, file_info, error_message):
     """传输错误回调"""
+    # 检查controller是否存在
+    if not hasattr(self, 'controller') or self.controller is None:
+        return
+        
     # 只处理接收文件
     if file_info.transfer_id not in self.controller.get_receive_tasks():
         return
@@ -127,6 +139,10 @@ def receive_onTransferError(self, file_info, error_message):
 
 def receive_updateDeviceList(self):
     """更新设备列表"""
+    # 检查controller是否存在
+    if not hasattr(self, 'controller') or self.controller is None:
+        return
+        
     devices = self.controller.get_devices()
     device_count = len(devices)
     
@@ -178,6 +194,10 @@ def send_onDeviceLost(self, device):
 
 def send_onTransferProgress(self, file_info, progress, speed):
     """传输进度回调"""
+    # 检查controller是否存在
+    if not hasattr(self, 'controller') or self.controller is None:
+        return
+        
     # 只处理发送文件
     tasks = self.controller.get_send_tasks()
     is_sending = False
@@ -230,6 +250,10 @@ def send_onTransferComplete(self, file_info, is_sender):
 
 def send_onTransferError(self, file_info, error_message):
     """传输错误回调"""
+    # 检查controller是否存在
+    if not hasattr(self, 'controller') or self.controller is None:
+        return
+        
     # 只处理发送文件
     tasks = self.controller.get_send_tasks()
     is_sending = False
@@ -257,23 +281,27 @@ def send_onTransferError(self, file_info, error_message):
 
 def send_updateDeviceSearchStatus(self):
     """更新设备搜索状态"""
-    if hasattr(self, 'deviceList') and self.deviceList is not None:
-        device_count = self.deviceList.count()
+    # 检查controller是否存在
+    if not hasattr(self, 'controller') or self.controller is None:
+        return
         
+    # 获取已发现的设备数量
+    device_count = len(self.controller.get_devices())
+    
+    # 更新状态文本
+    if hasattr(self, 'searchStatusLabel'):
         if device_count == 0:
-            # 没有设备，显示搜索动画
-            if hasattr(self, 'deviceSearchAnimation'):
-                self.deviceSearchAnimation.setVisible(True)
-            
-            if hasattr(self, 'deviceStatusLabel'):
-                self.deviceStatusLabel.setText("正在搜索设备...")
+            self.searchStatusLabel.setText("正在搜索附近设备...")
         else:
-            # 有设备，隐藏搜索动画
-            if hasattr(self, 'deviceSearchAnimation'):
-                self.deviceSearchAnimation.setVisible(False)
-            
-            if hasattr(self, 'deviceStatusLabel'):
-                self.deviceStatusLabel.setText(f"发现 {device_count} 台设备")
+            self.searchStatusLabel.setText(f"找到 {device_count} 个设备")
+    
+    # 启用/禁用发送按钮
+    if hasattr(self, 'sendButton'):
+        # 判断是否已选择文件和设备
+        has_files = hasattr(self, 'fileList') and self.fileList.count() > 0
+        has_selected_device = hasattr(self, 'deviceList') and self.deviceList.currentItem() is not None
+        
+        self.sendButton.setEnabled(has_files and has_selected_device)
 
 def send_resetTransferStatus(self):
     """重置传输状态"""
@@ -284,65 +312,53 @@ def send_resetTransferStatus(self):
         self.statusLabel.setText("准备就绪")
 
 def send_sendFilesToDevice(self):
-    """发送文件到选中的设备"""
-    # 检查是否选择了设备
-    if not hasattr(self, 'deviceList') or self.deviceList is None or not self.deviceList.currentItem():
-        QMessageBox.warning(self, "发送错误", "请先选择一个接收设备")
+    """发送文件到所选设备"""
+    # 检查controller是否存在
+    if not hasattr(self, 'controller') or self.controller is None:
+        return
+        
+    # 获取当前选择的设备
+    if not hasattr(self, 'deviceList') or not self.deviceList.currentItem():
+        QMessageBox.warning(self, "发送失败", "请先选择一个设备")
         return
     
-    # 获取选中的设备ID - 修正为与 send_onDeviceFound 一致的数据键
-    selected_item = self.deviceList.currentItem()
-    device_id = selected_item.data(100)
-    display_text = selected_item.text()
+    # 获取选择的设备ID
+    device_id = self.deviceList.currentItem().data(100)
     
-    # 添加调试信息
-    print(f"选择的设备: {display_text}")
-    print(f"选择的设备ID: {device_id}")
-    
-    # 获取设备列表以进行对比
-    if hasattr(self, 'controller'):
-        print("实际设备列表:")
-        for dev in self.controller.get_devices():
-            print(f"  - {dev.device_name} ({dev.device_id}) @ {dev.ip_address}")
-    
-    # 检查是否有文件要发送
-    if not hasattr(self, 'fileList') or self.fileList is None or self.fileList.count() == 0:
-        QMessageBox.warning(self, "发送错误", "请先添加要发送的文件")
-        return
-    
-    # 获取文件列表
+    # 获取需要发送的文件列表
     file_paths = []
-    for i in range(self.fileList.count()):
-        item = self.fileList.item(i)
-        if item.data(Qt.UserRole):
-            path = item.data(Qt.UserRole)
-            file_paths.append(path)
-            print(f"添加文件: {path}")
+    if hasattr(self, 'fileList'):
+        for i in range(self.fileList.count()):
+            item = self.fileList.item(i)
+            file_path = item.data(Qt.UserRole)  # 获取文件路径
+            file_paths.append(file_path)
     
     if not file_paths:
-        QMessageBox.warning(self, "发送错误", "没有有效的文件可发送")
+        QMessageBox.warning(self, "发送失败", "请先选择要发送的文件")
         return
     
-    # 发送文件
+    # 开始发送
     transfer_ids = self.controller.send_files(device_id, file_paths)
     
-    if transfer_ids:
-        print(f"成功创建传输任务: {transfer_ids}")
-        if hasattr(self, 'statusLabel'):
-            self.statusLabel.setText(f"正在发送 {len(transfer_ids)} 个文件...")
-        
-        if hasattr(self, 'transferProgress'):
-            self.transferProgress.setValue(0)
-    else:
-        print("传输任务创建失败")
-        QMessageBox.warning(self, "发送错误", "发送失败，请检查网络连接")
+    if not transfer_ids:
+        QMessageBox.warning(self, "发送失败", "无法连接到所选设备，请稍后重试")
+        return
+    
+    # 显示发送状态
+    if hasattr(self, 'statusLabel'):
+        self.statusLabel.setText(f"正在发送 {len(file_paths)} 个文件...")
+    
+    # 准备进度条
+    if hasattr(self, 'transferProgress'):
+        self.transferProgress.setValue(0)
+        self.transferProgress.setVisible(True)
 
 # 应用扩展方法到原始类
 def apply_ui_extensions():
     """应用UI扩展方法到原始类"""
-    from localsend_ui_design import ReceivePanel, SendPanel
+    from localsend_ui_design import ReceivePanel, SendPanel, MainWindow
     
-    # 扩展接收面板
+    # 为ReceivePanel添加扩展方法
     ReceivePanel.onDeviceFound = receive_onDeviceFound
     ReceivePanel.onDeviceLost = receive_onDeviceLost
     ReceivePanel.onTransferRequest = receive_onTransferRequest
@@ -351,7 +367,7 @@ def apply_ui_extensions():
     ReceivePanel.onTransferError = receive_onTransferError
     ReceivePanel.updateDeviceList = receive_updateDeviceList
     
-    # 扩展发送面板
+    # 为SendPanel添加扩展方法
     SendPanel.onDeviceFound = send_onDeviceFound
     SendPanel.onDeviceLost = send_onDeviceLost
     SendPanel.onTransferProgress = send_onTransferProgress
@@ -361,20 +377,59 @@ def apply_ui_extensions():
     SendPanel.resetTransferStatus = send_resetTransferStatus
     SendPanel.sendFilesToDevice = send_sendFilesToDevice
     
-    # 重新连接发送面板的发送按钮
-    original_init = SendPanel.__init__
+    # 保存原始的__init__方法
+    original_send_panel_init = SendPanel.__init__
+    original_receive_panel_init = ReceivePanel.__init__
+    original_main_window_init = MainWindow.__init__
     
+    # 包装SendPanel的__init__方法，确保controller设置
     def send_panel_init_wrapper(self, *args, **kwargs):
-        original_init(self, *args, **kwargs)
-        
-        # 断开原来的模拟连接
-        if hasattr(self, 'sendButton'):
-            try:
-                self.sendButton.clicked.disconnect()
-            except:
-                pass
+        original_send_panel_init(self, *args, **kwargs)
+        # 确保controller属性存在
+        if not hasattr(self, 'controller'):
+            self.controller = None
             
-            # 连接到实际的发送函数
-            self.sendButton.clicked.connect(self.sendFilesToDevice)
+        # 如果已经实现了setAppController，则不覆盖
+        if not hasattr(self, 'setAppController'):
+            def setAppController(controller):
+                self.controller = controller
+                # 初始化时更新设备列表
+                self.updateDeviceSearchStatus()
+            self.setAppController = setAppController
     
-    SendPanel.__init__ = send_panel_init_wrapper 
+    # 包装ReceivePanel的__init__方法，确保controller设置
+    def receive_panel_init_wrapper(self, *args, **kwargs):
+        original_receive_panel_init(self, *args, **kwargs)
+        # 确保controller属性存在
+        if not hasattr(self, 'controller'):
+            self.controller = None
+    
+    # 包装MainWindow的__init__方法，确保controller传递
+    def main_window_init_wrapper(self, *args, **kwargs):
+        original_main_window_init(self, *args, **kwargs)
+        # 保存原始的setAppController方法
+        if hasattr(self, 'setAppController'):
+            original_set_controller = self.setAppController
+            
+            # 重写setAppController方法，确保传递给面板
+            def set_controller_wrapper(controller):
+                # 调用原始方法
+                original_set_controller(controller)
+                
+                # 确保传递给所有面板
+                if hasattr(self, 'receivePanel') and hasattr(self.receivePanel, 'controller'):
+                    self.receivePanel.controller = controller
+                    
+                if hasattr(self, 'sendPanel') and hasattr(self.sendPanel, 'controller'):
+                    self.sendPanel.controller = controller
+                    
+                if hasattr(self, 'settingsPanel') and hasattr(self.settingsPanel, 'controller'):
+                    self.settingsPanel.controller = controller
+            
+            # 替换方法
+            self.setAppController = set_controller_wrapper
+    
+    # 替换原始方法
+    SendPanel.__init__ = send_panel_init_wrapper
+    ReceivePanel.__init__ = receive_panel_init_wrapper
+    MainWindow.__init__ = main_window_init_wrapper 
