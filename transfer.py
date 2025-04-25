@@ -556,18 +556,24 @@ class TransferManager:
         actual_save_path = save_path or self.default_save_dir
             
         # 获取请求信息
-        request_info = self.pending_transfers[transfer_id]
-        if isinstance(request_info, dict):
-            file_info = request_info.get("file_info")
-            sender = request_info.get("sender")
-        else:
-            # 向后兼容，如果直接存储了FileInfo对象
-            file_info = request_info
+        pending_item = self.pending_transfers[transfer_id]
+        
+        # 兼容性处理：检查pending_item类型
+        if isinstance(pending_item, dict) and "file_info" in pending_item:
+            file_info = pending_item.get("file_info")
+            sender = pending_item.get("sender")
+        elif isinstance(pending_item, FileInfo):
+            file_info = pending_item
             sender = None
-            for device in self.network_manager.get_devices():
-                if device.device_id == file_info.device_id:
-                    sender = device
-                    break
+            # 尝试从device_id找到发送设备
+            if file_info.device_id:
+                for device in self.network_manager.get_devices():
+                    if device.device_id == file_info.device_id:
+                        sender = device
+                        break
+        else:
+            logger.error(f"无效的传输请求数据类型: {type(pending_item)}")
+            return False
         
         if not file_info:
             logger.error(f"无效的传输请求数据: {transfer_id}")
@@ -652,7 +658,18 @@ class TransferManager:
         # 创建任务
         sender = None
         if transfer_id in self.pending_transfers:
-            sender = self.pending_transfers[transfer_id]["sender"]
+            pending_data = self.pending_transfers[transfer_id]
+            # 兼容处理：检查pending_data是字典还是FileInfo对象
+            if isinstance(pending_data, dict) and "sender" in pending_data:
+                sender = pending_data["sender"]
+            elif isinstance(pending_data, FileInfo):
+                # 尝试从device_id查找设备
+                device_id = pending_data.device_id
+                if device_id:
+                    for device in self.network_manager.get_devices():
+                        if device.device_id == device_id:
+                            sender = device
+                            break
             
         task = TransferTask(
             file_info=file_info,
@@ -668,21 +685,35 @@ class TransferManager:
     def reject_transfer(self, transfer_id: str, reason: str = "拒绝传输") -> bool:
         """拒绝传输请求"""
         # 获取对应的文件信息
-        file_info = self.pending_transfers.get(transfer_id)
-        if not file_info:
+        pending_item = self.pending_transfers.get(transfer_id)
+        if not pending_item:
             logger.error(f"找不到传输请求: {transfer_id}")
             return False
         
-        # 发送拒绝传输的响应
-        sender_id = transfer_id.split('_')[0]  # transfer_id格式为 "sender_id_file_id"
+        # 兼容性处理：检查pending_item类型
+        if isinstance(pending_item, dict) and "file_info" in pending_item:
+            file_info = pending_item["file_info"]
+            device_id = file_info.device_id
+        elif isinstance(pending_item, FileInfo):
+            file_info = pending_item
+            device_id = file_info.device_id
+        else:
+            logger.error(f"无效的传输请求数据: {transfer_id}")
+            return False
+        
+        # 如果从文件信息中没有找到device_id，尝试从transfer_id解析
+        if not device_id:
+            device_id = transfer_id.split('_')[0]  # transfer_id格式为 "sender_id_file_id"
+            
+        # 查找设备
         sender_device = None
         for device in self.network_manager.get_devices():
-            if device.device_id == sender_id:
+            if device.device_id == device_id:
                 sender_device = device
                 break
         
         if not sender_device:
-            logger.error(f"找不到发送方设备，ID={sender_id}")
+            logger.error(f"找不到发送方设备，ID={device_id}")
             return False
         
         # 发送拒绝传输的消息
