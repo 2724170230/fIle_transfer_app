@@ -409,36 +409,60 @@ class NetworkManager:
         return list(self.devices.values())
     
     def send_message(self, device: DeviceInfo, message: Message) -> bool:
-        """发送消息到指定设备
+        """向指定设备发送消息
         
-        参数:
-            device: 目标设备
-            message: 要发送的消息
+        Args:
+            device: 目标设备信息
+            message: 要发送的消息对象
             
-        返回:
-            bool: 发送成功返回True，否则返回False
+        Returns:
+            bool: 发送是否成功
         """
-        try:
-            # 创建UDP套接字
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.settimeout(SOCKET_TIMEOUT)
+        if not device or not message:
+            logger.error("无法发送消息：设备或消息为空")
+            return False
             
-            # 将消息转换为字节流
-            data = message.to_bytes()
+        client_socket = None
+        try:
+            # 创建TCP套接字
+            client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client_socket.settimeout(SOCKET_TIMEOUT)
+            
+            # 连接到目标设备
+            logger.debug(f"尝试连接到 {device.ip_address}:{device.port}")
+            client_socket.connect((device.ip_address, device.port))
             
             # 发送消息
-            target_address = (device.ip_address, device.port)
-            sock.sendto(data, target_address)
+            message_bytes = message.to_bytes()
+            bytes_sent = 0
+            total_bytes = len(message_bytes)
             
-            # 关闭套接字
-            sock.close()
-            
-            logger.debug(f"发送消息 {message.msg_type} 到 {device.device_name}")
+            # 确保所有数据都被发送
+            while bytes_sent < total_bytes:
+                sent = client_socket.send(message_bytes[bytes_sent:])
+                if sent == 0:
+                    raise RuntimeError("套接字连接已断开")
+                bytes_sent += sent
+                
+            logger.debug(f"成功发送消息: {message.msg_type} 到 {device.device_name}")
             return True
             
+        except ConnectionRefusedError:
+            logger.warning(f"连接被拒绝: {device.ip_address}:{device.port}")
+            return False
+        except socket.timeout:
+            logger.warning(f"连接超时: {device.ip_address}:{device.port}")
+            return False
         except Exception as e:
             logger.error(f"发送消息失败: {e}")
             return False
+        finally:
+            # 确保套接字被关闭
+            if client_socket:
+                try:
+                    client_socket.close()
+                except:
+                    pass
     
     def create_server_socket(self) -> socket.socket:
         """创建服务器套接字用于文件传输"""
