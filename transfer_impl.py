@@ -8,12 +8,33 @@ import json
 import select
 from queue import Queue
 from typing import Dict, List, Tuple, Optional, Callable, Any, Set
+import struct
+import traceback
 
 from network import NetworkManager, Message, MessageType, DeviceInfo, BUFFER_SIZE, TRANSFER_PORT
 from transfer import TransferManager, TransferTask, FileInfo
 
 # 配置日志
 logger = logging.getLogger("SendNow.TransferImpl")
+
+def recv_all(sock: socket.socket, n: int) -> bytes:
+    """
+    确保从套接字接收指定数量的字节
+    
+    Args:
+        sock: 套接字对象
+        n: 需要接收的字节数
+        
+    Returns:
+        bytes: 接收到的字节数据
+    """
+    data = b''
+    while len(data) < n:
+        packet = sock.recv(n - len(data))
+        if not packet:  # 套接字已关闭
+            return None
+        data += packet
+    return data
 
 def _transfer_server_loop(self):
     """传输服务器循环，监听传入的连接请求"""
@@ -240,10 +261,37 @@ def _handle_file_info(self, message: Message, client_sock: socket.socket, client
         return
     
     # 更新文件信息
-    task.file_info = FileInfo.from_dict(file_data)
-    task.file_info.save_path = os.path.join(self.default_save_dir, task.file_info.file_name)
+    file_info = FileInfo.from_dict(file_data)
     
-    logger.info(f"准备接收文件: {task.file_info.file_name}, 大小: {task.file_info.get_formatted_size()}")
+    # 确保保存路径存在并且有权限写入
+    save_dir = self.default_save_dir
+    full_save_path = os.path.join(save_dir, file_info.file_name)
+    
+    # 创建保存目录
+    try:
+        os.makedirs(save_dir, exist_ok=True)
+        logger.info(f"确保保存目录存在: {save_dir}, 完整保存路径: {full_save_path}")
+        
+        # 检查目录权限
+        if not os.access(save_dir, os.W_OK):
+            logger.error(f"无权限写入保存目录: {save_dir}")
+            # 尝试使用临时目录
+            import tempfile
+            temp_dir = tempfile.gettempdir()
+            full_save_path = os.path.join(temp_dir, file_info.file_name)
+            logger.info(f"改用临时目录: {temp_dir}, 新保存路径: {full_save_path}")
+    except Exception as e:
+        logger.error(f"创建保存目录失败: {e}")
+        import tempfile
+        temp_dir = tempfile.gettempdir()
+        full_save_path = os.path.join(temp_dir, file_info.file_name)
+        logger.info(f"改用临时目录: {temp_dir}, 新保存路径: {full_save_path}")
+    
+    # 设置文件保存路径
+    file_info.save_path = full_save_path
+    task.file_info = file_info
+    
+    logger.info(f"准备接收文件: {task.file_info.file_name}, 大小: {task.file_info.get_formatted_size()}, 保存到: {task.file_info.save_path}")
     
     # 创建接收线程
     receiver_thread = threading.Thread(
@@ -433,129 +481,146 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
             del self.sender_threads[transfer_id]
 
 def _receive_file(self, task: TransferTask, client_sock: socket.socket):
-    """接收文件实现"""
+    """接收文件内容并保存"""
     try:
-        file_info = task.file_info
-        transfer_id = task.transfer_id
+        # 确认文件信息已设置
+        if not task.file_info or not task.file_info.save_path:
+            raise ValueError(f"任务{task.task_id}的文件信息未设置或保存路径无效")
         
-        # 标记任务开始
-        task.start_time = time.time()
-        task.status = "transferring"
-        file_info.status = "transferring"
+        logger.info(f"开始接收文件: {task.file_info.file_name}, 保存到: {task.file_info.save_path}")
         
-        # 创建保存文件的目录
-        save_dir = os.path.dirname(file_info.save_path)
+        # 设置任务状态为正在接收
+        task.status = "receiving"
+        if task.manager:
+            task.manager.update_task_status(task)
+        
+        # 确保目标目录存在
+        save_dir = os.path.dirname(task.file_info.save_path)
         os.makedirs(save_dir, exist_ok=True)
         
-        task.socket = client_sock
+        # 将文件名指定为绝对路径
+        save_path = task.file_info.save_path
         
-        # 打开文件用于写入
+        # 创建临时文件名，用于部分下载
+        temp_file_path = f"{save_path}.part"
+        
         bytes_received = 0
+        expected_size = task.file_info.file_size
+        last_progress_update = time.time()
+        progress_update_interval = 0.5  # 更新间隔，秒
         
-        with open(file_info.save_path, 'wb') as f:
-            while not task.cancelled:
-                # 检查是否暂停
-                if task.paused:
-                    time.sleep(0.1)
-                    continue
-                
-                # 接收头部长度
+        logger.info(f"正在接收文件数据到临时文件: {temp_file_path}")
+        
+        with open(temp_file_path, 'wb') as f:
+            # 接收数据块直到文件接收完成
+            while bytes_received < expected_size:
+                # 最大缓冲区：8MB
+                client_sock.settimeout(30)  # 设置30秒超时
                 try:
-                    header_len_bytes = client_sock.recv(4)
-                    if not header_len_bytes:
-                        break
+                    # 接收数据块头部(数据块大小)
+                    header = recv_all(client_sock, 4)
+                    if not header or len(header) < 4:
+                        logger.error(f"接收文件头错误，收到: {header}")
+                        raise ConnectionError("接收文件头错误")
                     
-                    header_len = int.from_bytes(header_len_bytes, byteorder='big')
+                    # 解析数据块大小
+                    chunk_size = struct.unpack("!I", header)[0]
+                    logger.debug(f"接收数据块，大小: {chunk_size} 字节")
                     
-                    # 接收头部
-                    header_bytes = b""
-                    while len(header_bytes) < header_len:
-                        chunk = client_sock.recv(header_len - len(header_bytes))
-                        if not chunk:
-                            raise Exception("连接中断")
-                        header_bytes += chunk
-                    
-                    header = json.loads(header_bytes.decode('utf-8'))
-                    
-                    # 检查是否是完成消息
-                    if "completed" in header and header["completed"]:
-                        logger.info(f"接收文件完成: {file_info.file_name}")
-                        break
-                    
-                    # 获取数据大小
-                    data_size = header["size"]
-                    
-                    # 接收数据
-                    data = b""
-                    while len(data) < data_size:
-                        chunk = client_sock.recv(min(BUFFER_SIZE, data_size - len(data)))
-                        if not chunk:
-                            raise Exception("连接中断")
-                        data += chunk
-                    
-                    # 写入文件
-                    f.write(data)
-                    
-                    # 更新进度
-                    bytes_received += len(data)
-                    task.update_progress(bytes_received)
-                
+                    # 接收数据块
+                    if chunk_size > 0:
+                        chunk = recv_all(client_sock, chunk_size)
+                        if not chunk or len(chunk) < chunk_size:
+                            logger.error(f"接收数据块错误，预期大小: {chunk_size}，实际大小: {len(chunk) if chunk else 0}")
+                            raise ConnectionError("接收数据块错误")
+                        
+                        # 写入文件
+                        f.write(chunk)
+                        bytes_received += len(chunk)
+                        
+                        # 更新进度
+                        current_time = time.time()
+                        if current_time - last_progress_update >= progress_update_interval:
+                            task.update_progress(bytes_received)
+                            last_progress_update = current_time
+                            logger.debug(f"文件传输进度: {task.progress:.2f}%，已接收: {bytes_received}/{expected_size} 字节")
+                    else:
+                        logger.warning("收到零大小数据块，跳过")
+                        
                 except socket.timeout:
-                    logger.warning(f"接收超时: {transfer_id}")
-                    continue
-                except Exception as e:
-                    logger.error(f"接收数据出错: {e}")
-                    break
-        
-        # 验证文件完整性
-        if file_info.file_hash and not task.cancelled:
-            is_valid = file_info.verify_hash(file_info.save_path)
-            if not is_valid:
-                raise Exception("文件哈希验证失败，传输可能不完整")
-        
-        # 更新状态
-        if not task.cancelled:
-            task.status = "completed"
-            file_info.status = "completed"
-            task.end_time = time.time()
+                    logger.error("接收数据超时")
+                    raise ConnectionError("接收数据超时")
             
-            logger.info(f"文件接收完成: {file_info.file_name}, 保存到 {file_info.save_path}")
-            
-            # 触发完成回调
-            if self.on_transfer_complete:
-                self.on_transfer_complete(file_info, False)
-    
+            # 最后一次进度更新，确保显示100%
+            task.update_progress(bytes_received)
+            logger.info(f"文件接收完成: {task.file_info.file_name}，大小: {bytes_received} 字节")
+        
+        # 验证接收到的数据大小
+        if bytes_received != expected_size:
+            logger.error(f"文件大小不匹配: 预期 {expected_size}，实际接收 {bytes_received}")
+            task.status = "failed"
+            task.error_message = "文件大小不匹配"
+            os.remove(temp_file_path)  # 删除不完整文件
+            return
+        
+        # 验证文件哈希(如果有)
+        if task.file_info.file_hash:
+            with open(temp_file_path, 'rb') as f:
+                file_hash = compute_file_hash(f)
+                if file_hash != task.file_info.file_hash:
+                    logger.error(f"文件哈希不匹配: 预期 {task.file_info.file_hash}，计算得到 {file_hash}")
+                    task.status = "failed"
+                    task.error_message = "文件哈希不匹配"
+                    os.remove(temp_file_path)  # 删除不完整文件
+                    return
+        
+        # 将临时文件重命名为最终文件名
+        try:
+            # 确保目标文件不存在
+            if os.path.exists(save_path):
+                os.remove(save_path)
+            os.rename(temp_file_path, save_path)
+            logger.info(f"已将临时文件重命名为最终文件: {save_path}")
+        except Exception as e:
+            logger.error(f"重命名文件失败: {e}")
+            task.status = "failed"
+            task.error_message = f"重命名文件失败: {str(e)}"
+            return
+        
+        # 更新任务状态为已完成
+        task.status = "completed"
+        # 确保进度显示为100%
+        task.update_progress(expected_size)
+        logger.info(f"文件接收任务完成: {task.task_id}, 文件: {task.file_info.file_name}")
+        
+        # 发送完成确认消息
+        self._send_transfer_complete(task)
+        
+    except ConnectionError as e:
+        logger.error(f"连接错误: {e}")
+        task.status = "failed"
+        task.error_message = f"连接错误: {str(e)}"
     except Exception as e:
         logger.error(f"接收文件出错: {e}")
-        
-        # 更新状态
+        logger.error(traceback.format_exc())
         task.status = "failed"
-        file_info.status = "failed"
-        
-        # 删除不完整的文件
-        if file_info.save_path and os.path.exists(file_info.save_path):
-            try:
-                os.remove(file_info.save_path)
-                logger.info(f"删除不完整的文件: {file_info.save_path}")
-            except Exception as e:
-                logger.error(f"删除不完整文件失败: {e}")
-        
-        # 触发错误回调
-        if self.on_transfer_error:
-            self.on_transfer_error(file_info, f"接收失败: {str(e)}")
-    
+        task.error_message = f"接收文件出错: {str(e)}"
     finally:
-        # 清理资源
-        if client_sock:
-            client_sock.close()
+        # 更新任务状态
+        if task.manager:
+            task.manager.update_task_status(task)
         
-        # 从接收任务列表中移除
-        if transfer_id in self.receive_tasks and (task.status == "completed" or task.status == "failed"):
-            del self.receive_tasks[transfer_id]
+        # 如果任务失败且临时文件仍存在，删除它
+        if task.status == "failed" and os.path.exists(f"{save_path}.part"):
+            try:
+                os.remove(f"{save_path}.part")
+                logger.info(f"已删除不完整的临时文件: {save_path}.part")
+            except Exception as e:
+                logger.error(f"删除临时文件失败: {e}")
         
-        # 从线程池中移除
-        if transfer_id in self.receiver_threads:
-            del self.receiver_threads[transfer_id]
+        # 从接收线程列表中移除
+        if task.task_id in self.receiver_threads:
+            del self.receiver_threads[task.task_id]
 
 def _on_file_progress(self, file_info: FileInfo, progress: float, speed: float):
     """文件传输进度回调"""

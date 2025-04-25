@@ -216,7 +216,7 @@ class FileInfo:
 class TransferTask:
     """传输任务类，表示一个文件的传输任务"""
     
-    def __init__(self, file_info: FileInfo, device: DeviceInfo = None, is_sender: bool = True, save_path: str = None):
+    def __init__(self, file_info: FileInfo, device: DeviceInfo = None, is_sender: bool = True, save_path: str = None, manager = None):
         self.file_info = file_info
         self.device = device
         self.is_sender = is_sender
@@ -229,13 +229,42 @@ class TransferTask:
         self.last_update_time = time.time()
         self.paused = False
         self.cancelled = False
+        self.current_chunk = 0
+        self.manager = manager  # 保存传输管理器的引用，用于回调
         self.save_path = save_path
         self.error_message = None
         
     def update_progress(self, bytes_transferred: int):
         """更新传输进度"""
+        old_bytes = self.bytes_transferred
         self.bytes_transferred = bytes_transferred
-        self.last_update_time = time.time()
+        current_time = time.time()
+        self.last_update_time = current_time
+        
+        # 计算进度百分比
+        progress = self.get_progress()
+        
+        # 计算传输速度 (bytes/s)
+        speed = 0.0
+        if self.start_time:
+            elapsed = current_time - self.start_time
+            if elapsed > 0:
+                speed = bytes_transferred / elapsed
+        
+        # 如果是接收方，且progress有变化，记录日志
+        if not self.is_sender and (bytes_transferred - old_bytes > 8192 or progress >= 1.0):
+            logger.info(f"接收进度更新: {self.file_info.file_name} - {progress*100:.1f}%, 速度: {self.get_formatted_speed()}")
+        
+        # 调用文件传输管理器的进度回调
+        if hasattr(self, 'manager') and self.manager:
+            if hasattr(self.manager, '_on_file_progress'):
+                self.manager._on_file_progress(self.file_info, progress, speed)
+                logger.debug(f"调用manager._on_file_progress回调: {progress*100:.1f}%, {speed:.1f}B/s")
+            
+            # 调用_on_progress_update回调(如果存在)
+            if hasattr(self.manager, 'on_progress_update') and self.manager.on_progress_update:
+                self.manager.on_progress_update(self.file_info, progress, speed)
+                logger.debug(f"调用manager.on_progress_update回调: {progress*100:.1f}%, {speed:.1f}B/s")
         
     def get_progress(self) -> float:
         """获取传输进度百分比"""
@@ -490,7 +519,8 @@ class TransferManager:
             task = TransferTask(
                 file_info=file_info,
                 device=device,
-                is_sender=True
+                is_sender=True,
+                manager=self
             )
             
             # 将任务加入发送队列
@@ -675,7 +705,8 @@ class TransferManager:
             file_info=file_info,
             device=sender,
             is_sender=False,
-            save_path=full_save_path
+            save_path=full_save_path,
+            manager=self
         )
         
         # 添加到任务列表
@@ -1725,3 +1756,59 @@ class TransferManager:
         
         finally:
             client_sock.close() 
+
+    def create_direct_file_transfer(self, device: DeviceInfo, file_paths: List[str]) -> List[str]:
+        """
+        创建直接文件传输任务并立即开始传输
+        这是一个简化的方法，用于点对点直接传输文件，无需等待接收方确认
+        
+        Args:
+            device: 目标设备信息
+            file_paths: 要发送的文件路径列表
+            
+        Returns:
+            List[str]: 创建的传输任务ID列表
+        """
+        # 首先调用send_files方法创建传输任务
+        transfer_ids = self.send_files(device, file_paths)
+        
+        if not transfer_ids:
+            logging.error(f"创建文件传输任务失败")
+            return []
+        
+        # 遍历所有创建的任务
+        for transfer_id in transfer_ids:
+            task = self.send_tasks.get(transfer_id)
+            if not task:
+                logging.warning(f"找不到传输任务: {transfer_id}")
+                continue
+            
+            # 创建与接收方的连接
+            try:
+                client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                client_sock.settimeout(10.0)  # 设置连接超时时间
+                client_sock.connect((device.ip_address, device.port))
+                
+                # 自动设置任务状态为已接受
+                task.file_info.status = "transferring"
+                
+                # 创建发送线程并启动
+                sender_thread = threading.Thread(
+                    target=self._send_file,
+                    args=(task, client_sock)
+                )
+                sender_thread.daemon = True
+                self.sender_threads[transfer_id] = sender_thread
+                sender_thread.start()
+                
+                logging.info(f"启动直接文件传输: {task.file_info.file_name} -> {device.device_name}")
+            
+            except Exception as e:
+                logging.error(f"启动直接文件传输失败: {e}")
+                task.status = "failed"
+                task.error_message = f"连接失败: {str(e)}"
+        
+        return transfer_ids
+
+# 将方法添加到TransferManager类
+setattr(TransferManager, "create_direct_file_transfer", create_direct_file_transfer) 
