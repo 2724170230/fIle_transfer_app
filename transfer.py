@@ -8,6 +8,7 @@ import json
 from queue import Queue
 from typing import Dict, List, Tuple, Optional, Callable, Any, Set
 import uuid
+import inspect
 
 from network import NetworkManager, Message, MessageType, DeviceInfo, BUFFER_SIZE, TRANSFER_PORT
 
@@ -449,6 +450,10 @@ class TransferManager:
         file_infos = []
         transfer_ids = []
         
+        # 创建一个全局传输ID，用于兼容老版本
+        global_transfer_id = str(uuid.uuid4())
+        logger.info(f"创建全局传输ID: {global_transfer_id}")
+        
         for file_path in valid_paths:
             # 创建传输ID，确保包含设备标识符
             transfer_id = str(uuid.uuid4())
@@ -492,11 +497,13 @@ class TransferManager:
             
         # 构造传输请求
         if file_infos:
-            # 请求负载
+            # 请求负载 - 同时包含新旧字段以保持兼容性
             request_payload = {
                 "sender_id": self.network_manager.device_id,
                 "sender_name": self.network_manager.device_name,
-                "file_infos": [info.to_dict() for info in file_infos],
+                "file_infos": [info.to_dict() for info in file_infos],  # 新版本字段
+                "files": [info.to_dict() for info in file_infos],      # 旧版本字段
+                "transfer_id": global_transfer_id,                      # 旧版本需要的全局传输ID
                 "timestamp": time.time()
             }
             
@@ -818,24 +825,63 @@ class TransferManager:
             
         try:
             message_type = message.msg_type
-            payload = message.payload
+            
+            # 创建一个模拟的socket对象，用于与新版处理程序兼容
+            import socket
+            mock_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                # 尝试连接到原始地址以便作为有效的通信通道
+                mock_socket.connect((addr[0], TRANSFER_PORT))
+            except:
+                # 如果无法连接，创建一个无法发送数据的伪socket
+                class MockSocket:
+                    def sendall(self, *args, **kwargs):
+                        logger.warning("尝试在模拟Socket上发送数据")
+                    def send(self, *args, **kwargs):
+                        logger.warning("尝试在模拟Socket上发送数据")
+                        return 0
+                    def close(self):
+                        pass
+                mock_socket = MockSocket()
             
             if message_type == MessageType.TRANSFER_REQUEST:
-                self._handle_transfer_request(payload, addr)
+                # 调用新的处理函数
+                try:
+                    self._handle_transfer_request(message, mock_socket)
+                except TypeError:
+                    # 如果新函数不存在，回退到旧函数
+                    self._handle_transfer_request(message.payload, addr)
             elif message_type == MessageType.TRANSFER_ACCEPT:
-                self._handle_transfer_accept(payload)
+                try:
+                    self._handle_transfer_accept(message, mock_socket)
+                except TypeError:
+                    self._handle_transfer_accept(message.payload)
             elif message_type == MessageType.TRANSFER_REJECT:
-                self._handle_transfer_reject(payload)
+                try:
+                    self._handle_transfer_reject(message)
+                except TypeError:
+                    self._handle_transfer_reject(message.payload)
             elif message_type == MessageType.PAUSE:
-                self._handle_pause_message(payload)
+                try:
+                    self._handle_transfer_control(message)
+                except (TypeError, AttributeError):
+                    self._handle_pause_message(message.payload)
             elif message_type == MessageType.RESUME:
-                self._handle_resume_message(payload)
+                try:
+                    self._handle_transfer_control(message)
+                except (TypeError, AttributeError):
+                    self._handle_resume_message(message.payload)
             elif message_type == MessageType.CANCEL:
-                self._handle_cancel_message(payload)
+                try:
+                    self._handle_transfer_control(message)
+                except (TypeError, AttributeError):
+                    self._handle_cancel_message(message.payload)
             else:
                 logger.warning(f"未处理的消息类型: {message_type}")
         except Exception as e:
             logger.error(f"处理网络消息时出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     def _handle_transfer_request(self, payload: dict, addr: Tuple[str, int]):
         """处理传输请求
@@ -888,7 +934,6 @@ class TransferManager:
                 # 触发回调
                 if self.on_transfer_request:
                     # 检查回调函数期望的参数
-                    import inspect
                     sig = inspect.signature(self.on_transfer_request)
                     params = list(sig.parameters.keys())
                     
@@ -1100,10 +1145,25 @@ class TransferManager:
                     
                     logger.info(f"接收到来自 {client_ip} 的传输连接")
                     
-                    # 创建处理线程
-                    thread = threading.Thread(target=self._handle_client, args=(client_socket, address))
-                    thread.daemon = True
-                    thread.start()
+                    # 尝试使用新的处理方法
+                    try:
+                        # 检查是否存在新的处理方法
+                        if hasattr(self, "_handle_client_connection"):
+                            thread = threading.Thread(
+                                target=self._handle_client_connection, 
+                                args=(client_socket, address)
+                            )
+                        else:
+                            # 回退到旧的处理方法
+                            thread = threading.Thread(
+                                target=self._handle_client, 
+                                args=(client_socket, address)
+                            )
+                        thread.daemon = True
+                        thread.start()
+                    except Exception as e:
+                        logger.error(f"创建客户端处理线程时出错: {e}")
+                        client_socket.close()
                     
                 except socket.timeout:
                     # 超时继续循环
@@ -1128,20 +1188,24 @@ class TransferManager:
         max_retries = 3  # 最大重试次数
         
         try:
-            # 创建到接收方的TCP连接
-            client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client_socket.settimeout(30.0)  # 设置超时时间
-            
-            try:
-                # 连接到接收方
-                client_socket.connect((task.device.ip_address, task.device.port))
-            except (ConnectionRefusedError, socket.timeout, OSError) as e:
-                logger.error(f"连接到接收方失败: {e}")
-                task.status = "failed"
-                task.file_info.status = "failed"
-                if self.on_transfer_error:
-                    self.on_transfer_error(task.file_info, f"连接失败: {str(e)}")
-                return
+            # 如果不是从_handle_transfer_accept直接传递的socket，则需要创建连接
+            if not task.socket:
+                # 创建到接收方的TCP连接
+                client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                client_socket.settimeout(30.0)  # 设置超时时间
+                
+                try:
+                    # 连接到接收方
+                    client_socket.connect((task.device.ip_address, task.device.port))
+                except (ConnectionRefusedError, socket.timeout, OSError) as e:
+                    logger.error(f"连接到接收方失败: {e}")
+                    task.status = "failed"
+                    task.file_info.status = "failed"
+                    if self.on_transfer_error:
+                        self.on_transfer_error(task.file_info, f"连接失败: {str(e)}")
+                    return
+            else:
+                client_socket = task.socket
                 
             # 准备文件信息
             task.status = "transferring"
@@ -1158,7 +1222,7 @@ class TransferManager:
                 raise FileNotFoundError(f"文件不存在: {task.file_info.file_path}")
                 
             # 首先发送文件信息消息
-            file_info_message = Message(MessageType.FILE_INFO, task.file_info.to_dict())
+            file_info_message = Message(MessageType.FILE_INFO, {"file_info": task.file_info.to_dict()})
             client_socket.sendall(file_info_message.to_bytes())
             
             # 打开文件并开始传输
@@ -1166,8 +1230,10 @@ class TransferManager:
             bytes_sent = 0
             chunk_size = task.file_info.chunk_size
             last_progress_update = time.time()
+            file_size = task.file_info.file_size
+            transfer_id = task.transfer_id
             
-            while bytes_sent < task.file_info.file_size:
+            while bytes_sent < file_size:
                 # 检查任务是否被取消
                 if task.cancelled:
                     logger.info(f"传输已取消: {task.file_info.file_name}")
@@ -1177,25 +1243,36 @@ class TransferManager:
                 if task.paused:
                     time.sleep(0.1)  # 暂停状态下减少CPU使用
                     continue
-                    
+                
+                # 计算本次发送的大小
+                size_to_send = min(chunk_size, file_size - bytes_sent)
+                
                 # 读取文件块
-                chunk = file_handle.read(chunk_size)
+                chunk = file_handle.read(size_to_send)
                 if not chunk:  # 文件结束
                     break
-                    
-                # 尝试发送数据块
+                
+                # 构建数据包头，兼容新版本的格式
+                header = {
+                    "transfer_id": transfer_id,
+                    "offset": bytes_sent,
+                    "size": len(chunk)
+                }
+                header_json = json.dumps(header)
+                header_bytes = header_json.encode('utf-8')
+                
                 try:
-                    bytes_actually_sent = client_socket.send(chunk)
-                    if bytes_actually_sent == 0:
-                        # 连接已断开
-                        raise ConnectionError("连接已断开")
-                        
-                    bytes_sent += bytes_actually_sent
+                    # 发送头部长度（4字节）
+                    header_len = len(header_bytes)
+                    client_socket.sendall(header_len.to_bytes(4, byteorder='big'))
                     
-                    # 如果只发送了部分数据，调整文件指针
-                    if bytes_actually_sent < len(chunk):
-                        file_handle.seek(file_handle.tell() - (len(chunk) - bytes_actually_sent))
-                        
+                    # 发送头部
+                    client_socket.sendall(header_bytes)
+                    
+                    # 发送数据
+                    client_socket.sendall(chunk)
+                    
+                    bytes_sent += len(chunk)
                     task.update_progress(bytes_sent)
                     
                     # 定期更新进度通知
@@ -1203,8 +1280,10 @@ class TransferManager:
                     if now - last_progress_update > 0.5:  # 每0.5秒更新一次
                         last_progress_update = now
                         if self.on_progress_update:
-                            self.on_progress_update(task.file_info, bytes_sent / task.file_info.file_size)
-                            
+                            self.on_progress_update(task.file_info, bytes_sent / file_size)
+                        if self.on_file_progress:
+                            speed = task.get_speed()
+                            self.on_file_progress(task.file_info, bytes_sent / file_size, speed)
                 except (ConnectionError, socket.timeout, socket.error) as e:
                     logger.warning(f"发送数据时发生错误: {e}，尝试重试 ({retry_count+1}/{max_retries})")
                     retry_count += 1
@@ -1220,10 +1299,17 @@ class TransferManager:
                 # 重置重试计数器（成功发送后）
                 retry_count = 0
                 
+                # 控制发送速度，避免网络拥堵
+                time.sleep(0.001)
+                
             # 发送完成消息
-            if not task.cancelled and bytes_sent >= task.file_info.file_size:
-                # 添加文件哈希到完成消息中（如果有）
-                completion_payload = {"status": "success"}
+            if not task.cancelled and bytes_sent >= file_size:
+                # 添加文件哈希到完成消息中
+                completion_payload = {
+                    "transfer_id": transfer_id,
+                    "completed": True,
+                    "status": "success"
+                }
                 if task.file_info.file_hash:
                     completion_payload["file_hash"] = task.file_info.file_hash
                     
@@ -1237,6 +1323,8 @@ class TransferManager:
                 
                 if self.on_transfer_complete:
                     self.on_transfer_complete(task.file_info, True)
+                if self.on_file_complete:
+                    self.on_file_complete(task.file_info, True)
                     
         except FileNotFoundError as e:
             logger.error(f"文件不存在: {e}")
@@ -1244,6 +1332,8 @@ class TransferManager:
             task.file_info.status = "failed"
             if self.on_transfer_error:
                 self.on_transfer_error(task.file_info, f"文件不存在: {str(e)}")
+            if self.on_file_error:
+                self.on_file_error(task.file_info, f"文件不存在: {str(e)}")
                 
         except Exception as e:
             logger.error(f"发送文件时出错: {e}")
@@ -1251,6 +1341,8 @@ class TransferManager:
             task.file_info.status = "failed"
             if self.on_transfer_error:
                 self.on_transfer_error(task.file_info, f"发送失败: {str(e)}")
+            if self.on_file_error:
+                self.on_file_error(task.file_info, f"发送失败: {str(e)}")
                 
         finally:
             # 清理资源
@@ -1270,6 +1362,10 @@ class TransferManager:
             if task.transfer_id in self.sender_threads:
                 del self.sender_threads[task.transfer_id]
                 
+            # 如果任务已完成或失败，从任务列表中移除
+            if task.transfer_id in self.sender_tasks and (task.status == "completed" or task.status == "failed"):
+                del self.sender_tasks[task.transfer_id]
+
     def _handle_client(self, client_socket, client_address):
         """处理客户端连接的方法"""
         logger.info(f"接受来自 {client_address} 的连接")
@@ -1478,4 +1574,111 @@ class TransferManager:
                 
             # 清理任务引用
             if task and task.transfer_id in self.receiver_tasks:
-                task.socket = None 
+                task.socket = None
+
+    def _handle_client_connection(self, client_sock: socket.socket, client_addr: Tuple[str, int]):
+        """处理客户端连接（新版实现，与transfer_impl.py兼容）
+        
+        该方法充当_handle_client和transfer_impl.py中_handle_client_connection的桥梁
+        """
+        try:
+            client_sock.settimeout(10.0)  # 设置超时时间
+            
+            # 接收消息
+            data = b""
+            chunk = client_sock.recv(8192)  # 使用相同的缓冲区大小
+            while chunk:
+                data += chunk
+                # 检查是否接收到完整消息
+                try:
+                    # 尝试解析JSON，如果成功则说明消息接收完毕
+                    json.loads(data.decode('utf-8'))
+                    break
+                except:
+                    # 继续接收
+                    try:
+                        chunk = client_sock.recv(8192)
+                        if not chunk:  # 连接已关闭
+                            break
+                    except socket.timeout:
+                        logger.warning(f"从 {client_addr} 接收数据超时")
+                        break
+            
+            # 解析消息
+            message = Message.from_bytes(data)
+            if not message:
+                logger.error(f"从 {client_addr} 接收到无效消息")
+                client_sock.close()
+                return
+            
+            logger.debug(f"从 {client_addr} 接收到消息: {message.msg_type}")
+            
+            if message.msg_type == MessageType.TRANSFER_REQUEST:
+                # 处理传输请求
+                try:
+                    if hasattr(self, "_handle_transfer_request") and len(inspect.signature(self._handle_transfer_request).parameters) >= 3:
+                        self._handle_transfer_request(message, client_sock)
+                    else:
+                        self._handle_transfer_request(message.payload, client_addr)
+                except Exception as e:
+                    logger.error(f"处理传输请求出错: {e}")
+            
+            elif message.msg_type == MessageType.TRANSFER_ACCEPT:
+                # 处理传输接受
+                try:
+                    if hasattr(self, "_handle_transfer_accept") and len(inspect.signature(self._handle_transfer_accept).parameters) >= 3:
+                        self._handle_transfer_accept(message, client_sock)
+                    else:
+                        self._handle_transfer_accept(message.payload)
+                except Exception as e:
+                    logger.error(f"处理传输接受出错: {e}")
+            
+            elif message.msg_type == MessageType.TRANSFER_REJECT:
+                # 处理传输拒绝
+                try:
+                    # 检查方法签名来决定调用哪个版本
+                    if hasattr(self, "_handle_transfer_reject") and len(inspect.signature(self._handle_transfer_reject).parameters) == 2:
+                        self._handle_transfer_reject(message)
+                    else:
+                        self._handle_transfer_reject(message.payload)
+                except Exception as e:
+                    logger.error(f"处理传输拒绝出错: {e}")
+            
+            elif message.msg_type == MessageType.FILE_INFO:
+                # 处理文件信息
+                try:
+                    if hasattr(self, "_handle_file_info"):
+                        self._handle_file_info(message, client_sock, client_addr)
+                    else:
+                        # 旧版本中没有这个方法，尝试使用_handle_client中的处理逻辑
+                        self._handle_client(client_sock, client_addr)
+                except Exception as e:
+                    logger.error(f"处理文件信息出错: {e}")
+            
+            elif message.msg_type in [MessageType.PAUSE, MessageType.RESUME, MessageType.CANCEL]:
+                # 处理传输控制命令
+                try:
+                    if hasattr(self, "_handle_transfer_control"):
+                        self._handle_transfer_control(message)
+                    else:
+                        # 回退到各自的处理函数
+                        if message.msg_type == MessageType.PAUSE:
+                            self._handle_pause_message(message.payload)
+                        elif message.msg_type == MessageType.RESUME:
+                            self._handle_resume_message(message.payload)
+                        elif message.msg_type == MessageType.CANCEL:
+                            self._handle_cancel_message(message.payload)
+                except Exception as e:
+                    logger.error(f"处理传输控制出错: {e}")
+            
+            else:
+                # 其他消息类型
+                logger.warning(f"未处理的消息类型: {message.msg_type}")
+        
+        except Exception as e:
+            logger.error(f"处理连接 {client_addr} 出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+        
+        finally:
+            client_sock.close() 

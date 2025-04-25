@@ -111,14 +111,21 @@ def _handle_client_connection(self, client_sock: socket.socket, client_addr: Tup
 def _handle_transfer_request(self, message: Message, client_sock: socket.socket):
     """处理传输请求"""
     payload = message.payload
-    if not payload or "transfer_id" not in payload or "files" not in payload:
-        logger.error("无效的传输请求消息")
+    if not payload or "transfer_id" not in payload:
+        logger.error("无效的传输请求消息：缺少transfer_id")
+        return
+    
+    # 兼容性处理：检查files或file_infos字段
+    if "files" not in payload and "file_infos" not in payload:
+        logger.error("无效的传输请求消息：缺少files或file_infos")
         return
     
     transfer_id = payload["transfer_id"]
     sender_id = payload.get("sender_id")
     sender_name = payload.get("sender_name", "未知设备")
-    files_data = payload.get("files", [])
+    
+    # 兼容性处理：优先使用file_infos，如果不存在则使用files
+    files_data = payload.get("file_infos", []) or payload.get("files", [])
     
     # 查找发送设备
     sender_device = None
