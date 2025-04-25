@@ -12,7 +12,7 @@ from PyQt5.QtCore import Qt, QSize, pyqtSignal, QMimeData, QUrl, QTimer, QRect, 
 from PyQt5.QtGui import QIcon, QColor, QPalette, QFont, QDrag, QPainter, QPen, QBrush, QPainterPath, QRadialGradient, QLinearGradient, QTransform
 
 # 更高对比度的赛博朋克风格色调
-DARK_BG = "#10111E"        # 更深的导航栏背景色
+DARK_BG = "#0A0B15"        # 更暗的导航栏背景色，增强对比度
 MAIN_BG = "#151829"        # 更深的主界面背景
 PANEL_BG = "#1D203A"       # 更明显的面板背景
 INNER_BG = "#262B4A"       # 更亮的内部元素背景
@@ -218,11 +218,11 @@ class NavigationButton(QToolButton):
             QToolButton:checked {{
                 color: {TEXT_COLOR};
                 background-color: {PANEL_BG};
-                border-left: 3px solid {HIGHLIGHT_COLOR};
+                border-left: 4px solid {HIGHLIGHT_COLOR};
             }}
             QToolButton:hover:!checked {{
                 color: {TEXT_COLOR};
-                background-color: rgba(255, 255, 255, 0.1);
+                background-color: rgba(255, 255, 255, 0.15);
             }}
         """)
 
@@ -783,6 +783,55 @@ class ReceivePanel(QWidget):
         """)
         self.testButton.clicked.connect(self.simulateReceive)
         layout.addWidget(self.testButton, 0, Qt.AlignRight)
+        
+        # 保存对AppController的引用
+        self.controller = None
+    
+    def onDeviceFound(self, device):
+        """设备发现回调"""
+        # 在接收页面，我们通常只显示设备总数，不显示具体设备列表
+        pass
+    
+    def onDeviceLost(self, device):
+        """设备丢失回调"""
+        # 在接收页面，我们通常只显示设备总数，不显示具体设备列表
+        pass
+    
+    def onTransferRequest(self, device, files):
+        """传输请求回调"""
+        # 显示传输请求提示
+        file_names = [f.file_name for f in files]
+        file_str = "、".join(file_names[:3])
+        if len(file_names) > 3:
+            file_str += f"等 {len(file_names)} 个文件"
+        
+        self.statusPanel.setStatus(f"接收来自 {device.device_name} 的文件: {file_str}")
+        self.statusPanel.showProgress()
+    
+    def onTransferProgress(self, file_info, progress, speed):
+        """传输进度回调"""
+        # 更新进度条
+        self.statusPanel.progressBar.setValue(int(progress * 100))
+        
+        # 显示传输速度
+        speed_str = "KB/s"
+        speed_val = speed / 1024
+        if speed_val > 1024:
+            speed_str = "MB/s"
+            speed_val /= 1024
+        
+        self.statusPanel.setStatus(
+            f"正在接收: {file_info.file_name} - {speed_val:.1f} {speed_str}"
+        )
+    
+    def onTransferComplete(self, file_info, is_sender):
+        """传输完成回调"""
+        if not is_sender:  # 只处理接收完成
+            self.statusPanel.showCompleted(file_info.file_name)
+    
+    def onTransferError(self, file_info, error_message):
+        """传输错误回调"""
+        self.statusPanel.setStatus(f"传输错误: {error_message}")
     
     def simulateReceive(self):
         """模拟接收文件过程"""
@@ -927,12 +976,19 @@ class SendPanel(QWidget):
             box-shadow: 0px 2px 8px rgba(0, 0, 0, 0.15);
         """)
         
+        # 保存对AppController的引用
+        self.app_controller = None
+        
         # ===== 底部区域：附近设备 =====
         
         # 搜索设备组件
         self.deviceSearchWidget = QWidget()
         searchLayout = QVBoxLayout(self.deviceSearchWidget)
         searchLayout.setContentsMargins(15, 15, 15, 15)  # 内部边距
+        
+        # 搜索状态标题和刷新按钮水平布局
+        titleLayout = QHBoxLayout()
+        titleLayout.setContentsMargins(0, 0, 0, 0)
         
         # 搜索状态标题
         searchTitle = QLabel("附近设备")
@@ -945,16 +1001,40 @@ class SendPanel(QWidget):
         """)
         searchTitle.setAlignment(Qt.AlignLeft)
         
-        # 旋转动画指示器和状态标签水平布局
-        statusLayout = QHBoxLayout()
-        statusLayout.setContentsMargins(0, 5, 0, 5)  # 减少内部边距
+        # 创建动画指示器
         self.searchAnimation = AnimationWidget()
+        
+        # 状态标签
         self.searchStatusLabel = QLabel("正在搜索附近设备...")
         self.searchStatusLabel.setStyleSheet(f"color: {SECONDARY_TEXT_COLOR}; font-size: 14px;")
         
-        statusLayout.addWidget(self.searchAnimation)
-        statusLayout.addWidget(self.searchStatusLabel)
-        statusLayout.addStretch()
+        # 刷新按钮
+        self.refreshButton = QPushButton("刷新")
+        self.refreshButton.setCursor(Qt.PointingHandCursor)
+        self.refreshButton.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BUTTON_BG};
+                color: {TEXT_COLOR};
+                border: none;
+                border-radius: 4px;
+                padding: 5px 15px;
+                font-size: 13px;
+            }}
+            QPushButton:hover {{
+                background-color: {QColor(BUTTON_BG).lighter(115).name()};
+            }}
+            QPushButton:pressed {{
+                background-color: {QColor(BUTTON_BG).darker(110).name()};
+            }}
+        """)
+        self.refreshButton.clicked.connect(self.refreshDevices)
+        
+        # 添加到标题布局
+        titleLayout.addWidget(searchTitle)
+        titleLayout.addWidget(self.searchAnimation)
+        titleLayout.addWidget(self.searchStatusLabel)
+        titleLayout.addStretch()
+        titleLayout.addWidget(self.refreshButton)
         
         # 设备列表
         self.deviceList = QListWidget()
@@ -987,8 +1067,7 @@ class SendPanel(QWidget):
         self.deviceList.setMaximumHeight(200)
         
         # 添加到搜索布局
-        searchLayout.addWidget(searchTitle)
-        searchLayout.addLayout(statusLayout)
+        searchLayout.addLayout(titleLayout)
         searchLayout.addWidget(self.deviceList)
         
         # 发送按钮
@@ -1034,6 +1113,14 @@ class SendPanel(QWidget):
         
         # 配置拖放功能
         self.setAcceptDrops(True)
+        
+        # 连接设备列表选择变化的信号
+        self.deviceList.itemSelectionChanged.connect(self.updateSelectedDeviceInfo)
+        
+        # 创建设备扫描定时器，每10秒扫描一次
+        self.scanTimer = QTimer(self)
+        self.scanTimer.timeout.connect(self.refreshDevices)
+        self.scanTimer.start(10000)  # 10秒
     
     def addFiles(self):
         """添加文件按钮点击事件"""
@@ -1214,8 +1301,165 @@ class SendPanel(QWidget):
             if hasattr(self, 'sendButton'):
                 self.sendButton.setEnabled(False)
 
+    def onTransferProgress(self, file_info, progress, speed):
+        """传输进度回调"""
+        # 在发送面板可以显示传输进度状态
+        # 这里可以添加一个状态标签
+        speed_str = "KB/s"
+        speed_val = speed / 1024
+        if speed_val > 1024:
+            speed_str = "MB/s"
+            speed_val /= 1024
+        
+        # 更新状态标签（如果有）
+        if hasattr(self, 'statusLabel'):
+            self.statusLabel.setText(
+                f"正在发送: {file_info.file_name} - {progress*100:.1f}% ({speed_val:.1f} {speed_str})"
+            )
+    
+    def onTransferComplete(self, file_info, is_sender):
+        """传输完成回调"""
+        if is_sender:  # 只处理发送完成
+            # 更新状态标签（如果有）
+            if hasattr(self, 'statusLabel'):
+                self.statusLabel.setText(f"发送完成: {file_info.file_name}")
+    
+    def onTransferError(self, file_info, error_message):
+        """传输错误回调"""
+        # 更新状态标签（如果有）
+        if hasattr(self, 'statusLabel'):
+            self.statusLabel.setText(f"发送错误: {error_message}")
+    
     def sendFiles(self):
         """发送文件按钮点击事件"""
+        # 检查是否有选择的设备
+        selected_device = self.deviceList.currentItem()
+        if not selected_device:
+            return
+        
+        # 获取设备ID
+        device_id = selected_device.data(100)
+        
+        # 获取所有待发送文件路径
+        file_paths = []
+        for i in range(self.fileList.count()):
+            file_paths.append(self.fileList.item(i).data(Qt.UserRole))
+        
+        if not file_paths:
+            return
+        
+        # 如果AppController可用，使用它发送文件
+        if self.app_controller:
+            # 添加状态标签（如果不存在）
+            if not hasattr(self, 'statusLabel'):
+                self.statusLabel = QLabel("准备发送文件...")
+                self.statusLabel.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px;")
+                layout = self.layout()
+                layout.insertWidget(layout.count()-1, self.statusLabel, 0, Qt.AlignCenter)
+            
+            # 发送文件
+            self.statusLabel.setText("正在发送文件...")
+            transfer_ids = self.app_controller.send_files(device_id, file_paths)
+            
+            if transfer_ids:
+                self.statusLabel.setText(f"已开始发送 {len(transfer_ids)} 个文件...")
+            else:
+                self.statusLabel.setText("文件发送失败，请检查网络连接")
+        else:
+            # 模拟发送成功
+            print(f"模拟发送文件到设备 {device_id}: {file_paths}")
+            # 这里可以添加模拟发送成功的提示
+
+    def setAppController(self, controller):
+        """设置AppController引用"""
+        self.app_controller = controller
+        
+        # 连接设备发现信号
+        if self.app_controller:
+            self.app_controller.deviceFound.connect(self.onDeviceFound)
+            self.app_controller.deviceLost.connect(self.onDeviceLost)
+            
+            # 立即填充设备列表
+            self.populateDeviceList()
+    
+    def refreshDevices(self):
+        """刷新附近设备列表"""
+        # 显示刷新状态
+        self.searchStatusLabel.setText("正在刷新附近设备...")
+        
+        # 确保动画可见并运行
+        self.searchAnimation.show()
+        
+        if self.app_controller:
+            # 清空当前设备列表
+            self.deviceList.clear()
+            
+            # 直接获取当前已知设备并显示
+            self.populateDeviceList()
+            
+            # 主动触发一次设备发现（这将在后台进行）
+            # 注意：NetworkManager的设备发现在discover_loop中自动进行
+            # 这里只需要确保定时器在运行即可
+            pass
+        else:
+            # 如果没有controller，使用模拟数据（开发测试用）
+            QTimer.singleShot(2000, self.simulateDeviceDiscovery)
+    
+    def populateDeviceList(self):
+        """填充设备列表"""
+        if not self.app_controller:
+            return
+            
+        # 获取当前已知设备
+        devices = self.app_controller.get_devices()
+        
+        # 添加到列表
+        for device in devices:
+            self.addDeviceToList(device)
+        
+        # 更新状态消息
+        self.searchStatusLabel.setText(f"找到 {len(devices)} 个设备")
+    
+    def addDeviceToList(self, device):
+        """添加设备到列表"""
+        # 检查是否已经在列表中
+        for i in range(self.deviceList.count()):
+            if self.deviceList.item(i).data(100) == device.device_id:
+                return  # 已存在，不重复添加
+        
+        # 创建列表项
+        item = QListWidgetItem()
+        item.setText(f"{device.device_name} ({device.device_id})")
+        item.setData(100, device.device_id)  # 存储设备ID
+        
+        # 添加到列表
+        self.deviceList.addItem(item)
+    
+    def removeDeviceFromList(self, device):
+        """从列表中移除设备"""
+        for i in range(self.deviceList.count()):
+            if self.deviceList.item(i).data(100) == device.device_id:
+                self.deviceList.takeItem(i)
+                break
+    
+    def onDeviceFound(self, device):
+        """设备发现回调"""
+        self.addDeviceToList(device)
+        
+        # 更新状态消息
+        devices_count = self.deviceList.count()
+        self.searchStatusLabel.setText(f"找到 {devices_count} 个设备")
+    
+    def onDeviceLost(self, device):
+        """设备丢失回调"""
+        self.removeDeviceFromList(device)
+        
+        # 更新状态消息
+        devices_count = self.deviceList.count()
+        self.searchStatusLabel.setText(f"找到 {devices_count} 个设备")
+    
+    def simulateDeviceDiscovery(self):
+        """模拟发现设备（仅用于演示）"""
         # ... existing code ...
 
 class SettingsPanel(QWidget):
@@ -1301,6 +1545,8 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
+        # 创建应用控制器
+        self.app_controller = None
         self.initUI()
     
     def initUI(self):
@@ -1345,6 +1591,8 @@ class MainWindow(QMainWindow):
         
         # 创建主布局
         mainLayout = QHBoxLayout()
+        mainLayout.setContentsMargins(0, 0, 0, 0)  # 移除边距，消除间隙
+        mainLayout.setSpacing(0)  # 移除组件之间的间隙
         centralWidget = QWidget()
         centralWidget.setLayout(mainLayout)
         self.setCentralWidget(centralWidget)
@@ -1364,8 +1612,8 @@ class MainWindow(QMainWindow):
             color: {TEXT_COLOR}; 
             font-size: 22px; 
             font-weight: bold;
-            padding: 15px 0;
-            background-color: {QColor(DARK_BG).darker(130).name()};
+            padding: 18px 0;
+            background-color: {QColor(DARK_BG).darker(150).name()};
             border-radius: 0px;
             text-align: center;
         """)
@@ -1419,6 +1667,17 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentWidget(self.sendPanel)
         elif button == self.settingsButton:
             self.stack.setCurrentWidget(self.settingsPanel)
+
+    def setAppController(self, controller):
+        """设置应用控制器"""
+        self.app_controller = controller
+        
+        # 将控制器连接到面板
+        self.sendPanel.setAppController(controller)
+        
+        # 启动网络服务
+        if self.app_controller:
+            self.app_controller.start()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

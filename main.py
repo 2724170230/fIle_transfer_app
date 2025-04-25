@@ -91,11 +91,8 @@ def main():
 
 def connect_ui_controller(window, controller):
     """连接UI和控制器"""
-    # 保存到UI类中
-    window.controller = controller
-    window.receivePanel.controller = controller
-    window.sendPanel.controller = controller
-    window.settingsPanel.controller = controller
+    # 使用新的方法设置控制器
+    window.setAppController(controller)
     
     # 接收面板
     receive_panel = window.receivePanel
@@ -118,10 +115,6 @@ def connect_ui_controller(window, controller):
     
     # 发送面板
     send_panel = window.sendPanel
-    
-    # 设备发现事件
-    controller.deviceFound.connect(send_panel.onDeviceFound)
-    controller.deviceLost.connect(send_panel.onDeviceLost)
     
     # 传输进度事件
     controller.transferProgress.connect(send_panel.onTransferProgress)
