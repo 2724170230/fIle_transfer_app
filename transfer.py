@@ -1757,58 +1757,59 @@ class TransferManager:
         finally:
             client_sock.close() 
 
-    def create_direct_file_transfer(self, device: DeviceInfo, file_paths: List[str]) -> List[str]:
-        """
-        创建直接文件传输任务并立即开始传输
-        这是一个简化的方法，用于点对点直接传输文件，无需等待接收方确认
+# 将create_direct_file_transfer函数定义在模块级别，而不是在类内部
+def create_direct_file_transfer(self, device: DeviceInfo, file_paths: List[str]) -> List[str]:
+    """
+    创建直接文件传输任务并立即开始传输
+    这是一个简化的方法，用于点对点直接传输文件，无需等待接收方确认
+    
+    Args:
+        device: 目标设备信息
+        file_paths: 要发送的文件路径列表
         
-        Args:
-            device: 目标设备信息
-            file_paths: 要发送的文件路径列表
+    Returns:
+        List[str]: 创建的传输任务ID列表
+    """
+    # 首先调用send_files方法创建传输任务
+    transfer_ids = self.send_files(device, file_paths)
+    
+    if not transfer_ids:
+        logging.error(f"创建文件传输任务失败")
+        return []
+    
+    # 遍历所有创建的任务
+    for transfer_id in transfer_ids:
+        task = self.send_tasks.get(transfer_id)
+        if not task:
+            logging.warning(f"找不到传输任务: {transfer_id}")
+            continue
+        
+        # 创建与接收方的连接
+        try:
+            client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client_sock.settimeout(10.0)  # 设置连接超时时间
+            client_sock.connect((device.ip_address, device.port))
             
-        Returns:
-            List[str]: 创建的传输任务ID列表
-        """
-        # 首先调用send_files方法创建传输任务
-        transfer_ids = self.send_files(device, file_paths)
-        
-        if not transfer_ids:
-            logging.error(f"创建文件传输任务失败")
-            return []
-        
-        # 遍历所有创建的任务
-        for transfer_id in transfer_ids:
-            task = self.send_tasks.get(transfer_id)
-            if not task:
-                logging.warning(f"找不到传输任务: {transfer_id}")
-                continue
+            # 自动设置任务状态为已接受
+            task.file_info.status = "transferring"
             
-            # 创建与接收方的连接
-            try:
-                client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                client_sock.settimeout(10.0)  # 设置连接超时时间
-                client_sock.connect((device.ip_address, device.port))
-                
-                # 自动设置任务状态为已接受
-                task.file_info.status = "transferring"
-                
-                # 创建发送线程并启动
-                sender_thread = threading.Thread(
-                    target=self._send_file,
-                    args=(task, client_sock)
-                )
-                sender_thread.daemon = True
-                self.sender_threads[transfer_id] = sender_thread
-                sender_thread.start()
-                
-                logging.info(f"启动直接文件传输: {task.file_info.file_name} -> {device.device_name}")
+            # 创建发送线程并启动
+            sender_thread = threading.Thread(
+                target=self._send_file,
+                args=(task, client_sock)
+            )
+            sender_thread.daemon = True
+            self.sender_threads[transfer_id] = sender_thread
+            sender_thread.start()
             
-            except Exception as e:
-                logging.error(f"启动直接文件传输失败: {e}")
-                task.status = "failed"
-                task.error_message = f"连接失败: {str(e)}"
+            logging.info(f"启动直接文件传输: {task.file_info.file_name} -> {device.device_name}")
         
-        return transfer_ids
+        except Exception as e:
+            logging.error(f"启动直接文件传输失败: {e}")
+            task.status = "failed"
+            task.error_message = f"连接失败: {str(e)}"
+    
+    return transfer_ids
 
 # 将方法添加到TransferManager类
 setattr(TransferManager, "create_direct_file_transfer", create_direct_file_transfer) 
