@@ -463,6 +463,7 @@ def _handle_network_message(self, message: Message, addr: Tuple[str, int]):
 
 def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
     """发送文件实现"""
+    needs_close = False
     try:
         file_info = task.file_info
         device = task.device
@@ -481,8 +482,8 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
             file_info.calculate_hash()
         
         # 如果没有提供socket，则创建一个新的连接
-        needs_close = False
         if not client_sock:
+            logger.debug(f"创建新的套接字连接到 {device.ip_address}:{device.port}")
             client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_sock.settimeout(10.0)
             client_sock.connect((device.ip_address, device.port))
@@ -494,6 +495,23 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
             
             # 等待接收方准备就绪
             time.sleep(0.5)
+        else:
+            # 检查socket是否有效
+            try:
+                client_sock.getpeername()  # 如果套接字已关闭会抛出异常
+            except Exception as e:
+                logger.warning(f"提供的套接字无效，创建新的连接: {e}")
+                client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                client_sock.settimeout(10.0)
+                client_sock.connect((device.ip_address, device.port))
+                needs_close = True
+                
+                # 发送文件信息
+                file_info_message = Message(MessageType.FILE_INFO, {"file_info": file_info.to_dict()})
+                client_sock.sendall(file_info_message.to_bytes())
+                
+                # 等待接收方准备就绪
+                time.sleep(0.5)
         
         task.socket = client_sock
         
@@ -526,15 +544,19 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
                 header_json = json.dumps(header)
                 header_bytes = header_json.encode('utf-8')
                 
-                # 发送头部长度（4字节）
-                header_len = len(header_bytes)
-                client_sock.sendall(header_len.to_bytes(4, byteorder='big'))
-                
-                # 发送头部
-                client_sock.sendall(header_bytes)
-                
-                # 发送数据
-                client_sock.sendall(chunk)
+                try:
+                    # 发送头部长度（4字节）
+                    header_len = len(header_bytes)
+                    client_sock.sendall(header_len.to_bytes(4, byteorder='big'))
+                    
+                    # 发送头部
+                    client_sock.sendall(header_bytes)
+                    
+                    # 发送数据
+                    client_sock.sendall(chunk)
+                except (socket.error, BrokenPipeError) as e:
+                    logger.error(f"发送数据时套接字错误: {e}")
+                    raise
                 
                 # 更新进度
                 bytes_sent += len(chunk)
@@ -566,6 +588,8 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
     
     except Exception as e:
         logger.error(f"发送文件出错: {e}")
+        if isinstance(e, socket.error):
+            logger.error(f"套接字错误详情: {traceback.format_exc()}")
         
         # 更新状态
         task.status = "failed"
@@ -578,7 +602,10 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
     finally:
         # 清理资源
         if needs_close and client_sock:
-            client_sock.close()
+            try:
+                client_sock.close()
+            except Exception as e:
+                logger.debug(f"关闭套接字时出错: {e}")
         
         # 从发送任务列表中移除
         if transfer_id in self.send_tasks and (task.status == "completed" or task.status == "failed"):
