@@ -191,7 +191,35 @@ def _handle_transfer_accept(self, message: Message, client_sock: socket.socket):
     transfer_id = payload["transfer_id"]
     accepted = payload.get("accepted", False)
     
+    # 查找对应的发送任务 - 直接匹配
     task = self.send_tasks.get(transfer_id)
+    
+    # 如果没有找到对应的任务，尝试查找相关的任务
+    if not task:
+        # 记录调试信息
+        logger.info(f"收到传输接受消息，但未找到直接对应的任务: {transfer_id}")
+        logger.info(f"当前的发送任务列表: {list(self.send_tasks.keys())}")
+        
+        # 尝试查找以该ID开头的任务（用于处理组合ID: global_id_file_id）
+        for task_id in list(self.send_tasks.keys()):
+            if task_id.startswith(transfer_id + "_") or transfer_id.startswith(task_id + "_"):
+                logger.info(f"找到关联的传输任务: {task_id}")
+                task = self.send_tasks.get(task_id)
+                transfer_id = task_id  # 更新为实际的任务ID
+                break
+        
+        # 尝试通过file_id匹配
+        if not task and "file_id" in payload:
+            file_id = payload.get("file_id")
+            logger.info(f"尝试通过文件ID匹配任务: {file_id}")
+            for task_id, task_obj in self.send_tasks.items():
+                if task_obj.file_info.file_id == file_id:
+                    logger.info(f"通过文件ID找到匹配的任务: {task_id}")
+                    task = task_obj
+                    transfer_id = task_id
+                    break
+    
+    # 如果仍未找到任务，报错并返回
     if not task:
         logger.error(f"找不到对应的发送任务: {transfer_id}")
         return
@@ -226,8 +254,35 @@ def _handle_transfer_reject(self, message: Message):
     transfer_id = payload["transfer_id"]
     reason = payload.get("reason", "未指定原因")
     
-    # 查找对应的发送任务
+    # 查找对应的发送任务 - 直接匹配
     task = self.send_tasks.get(transfer_id)
+    
+    # 如果没有找到对应的任务，尝试查找相关的任务
+    if not task:
+        # 记录调试信息
+        logger.info(f"收到传输拒绝消息，但未找到直接对应的任务: {transfer_id}")
+        logger.info(f"当前的发送任务列表: {list(self.send_tasks.keys())}")
+        
+        # 尝试查找以该ID开头的任务（用于处理组合ID: global_id_file_id）
+        for task_id in list(self.send_tasks.keys()):
+            if task_id.startswith(transfer_id + "_") or transfer_id.startswith(task_id + "_"):
+                logger.info(f"找到关联的传输任务: {task_id}")
+                task = self.send_tasks.get(task_id)
+                transfer_id = task_id  # 更新为实际的任务ID
+                break
+        
+        # 尝试通过file_id匹配
+        if not task and "file_id" in payload:
+            file_id = payload.get("file_id")
+            logger.info(f"尝试通过文件ID匹配任务: {file_id}")
+            for task_id, task_obj in self.send_tasks.items():
+                if task_obj.file_info.file_id == file_id:
+                    logger.info(f"通过文件ID找到匹配的任务: {task_id}")
+                    task = task_obj
+                    transfer_id = task_id
+                    break
+    
+    # 如果仍未找到任务，报错并返回
     if not task:
         logger.error(f"找不到对应的发送任务: {transfer_id}")
         return
@@ -254,8 +309,35 @@ def _handle_file_info(self, message: Message, client_sock: socket.socket, client
     file_data = payload["file_info"]
     transfer_id = file_data.get("transfer_id")
     
-    # 查找对应的接收任务
+    # 查找对应的接收任务 - 直接匹配
     task = self.receive_tasks.get(transfer_id)
+    
+    # 如果没有找到对应的任务，尝试查找相关的任务
+    if not task:
+        # 记录调试信息
+        logger.info(f"收到文件信息消息，但未找到直接对应的任务: {transfer_id}")
+        logger.info(f"当前的接收任务列表: {list(self.receive_tasks.keys())}")
+        
+        # 尝试查找以该ID开头的任务（用于处理组合ID: global_id_file_id）
+        for task_id in list(self.receive_tasks.keys()):
+            if task_id.startswith(transfer_id + "_") or transfer_id.startswith(task_id + "_"):
+                logger.info(f"找到关联的接收任务: {task_id}")
+                task = self.receive_tasks.get(task_id)
+                transfer_id = task_id  # 更新为实际的任务ID
+                break
+        
+        # 尝试通过file_id匹配
+        file_id = file_data.get("file_id")
+        if not task and file_id:
+            logger.info(f"尝试通过文件ID匹配任务: {file_id}")
+            for task_id, task_obj in self.receive_tasks.items():
+                if task_obj.file_info.file_id == file_id:
+                    logger.info(f"通过文件ID找到匹配的任务: {task_id}")
+                    task = task_obj
+                    transfer_id = task_id
+                    break
+    
+    # 如果仍未找到任务，报错并返回
     if not task:
         logger.error(f"找不到对应的接收任务: {transfer_id}")
         return
@@ -312,8 +394,34 @@ def _handle_transfer_control(self, message: Message):
     transfer_id = payload["transfer_id"]
     action = payload["action"]
     
-    # 查找对应的传输任务
+    # 查找对应的传输任务 - 直接匹配
     task = self.send_tasks.get(transfer_id) or self.receive_tasks.get(transfer_id)
+    
+    # 如果没有找到对应的任务，尝试查找相关的任务
+    if not task:
+        # 记录调试信息
+        logger.info(f"收到传输控制消息({action})，但未找到直接对应的任务: {transfer_id}")
+        logger.info(f"当前的发送任务列表: {list(self.send_tasks.keys())}")
+        logger.info(f"当前的接收任务列表: {list(self.receive_tasks.keys())}")
+        
+        # 尝试在发送任务中查找
+        for task_id in list(self.send_tasks.keys()):
+            if task_id.startswith(transfer_id + "_") or transfer_id.startswith(task_id + "_"):
+                logger.info(f"在发送任务中找到关联的传输任务: {task_id}")
+                task = self.send_tasks.get(task_id)
+                transfer_id = task_id  # 更新为实际的任务ID
+                break
+        
+        # 如果在发送任务中未找到，尝试在接收任务中查找
+        if not task:
+            for task_id in list(self.receive_tasks.keys()):
+                if task_id.startswith(transfer_id + "_") or transfer_id.startswith(task_id + "_"):
+                    logger.info(f"在接收任务中找到关联的传输任务: {task_id}")
+                    task = self.receive_tasks.get(task_id)
+                    transfer_id = task_id  # 更新为实际的任务ID
+                    break
+    
+    # 如果仍未找到任务，报错并返回
     if not task:
         logger.error(f"找不到对应的传输任务: {transfer_id}")
         return
