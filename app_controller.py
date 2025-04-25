@@ -45,6 +45,14 @@ class AppController(QObject):
         default_save_dir = os.path.join(os.path.expanduser("~"), "Downloads", "SendNow")
         self.transfer_manager = TransferManager(self.network_manager, default_save_dir)
         
+        # 应用属性补丁，确保兼容性
+        try:
+            from patch_attributes import patch_transfer_manager
+            patch_transfer_manager()
+            logger.info("已应用TransferManager属性补丁")
+        except Exception as e:
+            logger.warning(f"应用属性补丁失败: {e}")
+        
         # 注册回调函数
         self.network_manager.on_device_found = self._on_device_found
         self.network_manager.on_device_lost = self._on_device_lost

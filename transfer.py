@@ -363,6 +363,30 @@ class TransferManager:
         
         self.running = True
         
+        # 获取本机所有IP地址
+        local_ips = []
+        try:
+            import socket
+            hostname = socket.gethostname()
+            local_ips.append(f"主机名: {hostname}")
+            
+            local_ip = socket.gethostbyname(hostname)
+            local_ips.append(f"主机IP: {local_ip}")
+            
+            # 获取所有网络接口
+            import netifaces
+            interfaces = netifaces.interfaces()
+            for interface in interfaces:
+                addresses = netifaces.ifaddresses(interface)
+                if netifaces.AF_INET in addresses:
+                    for address in addresses[netifaces.AF_INET]:
+                        local_ips.append(f"接口 {interface}: {address['addr']}")
+        except Exception as e:
+            local_ips.append(f"获取IP地址失败: {e}")
+        
+        logger.info(f"本机网络接口信息: {', '.join(local_ips)}")
+        logger.info(f"网络管理器主机IP: {self.network_manager.host_ip}")
+        
         # 启动传输服务器线程，用于监听传入的传输请求
         self.server_thread = threading.Thread(target=self._transfer_server_loop)
         self.server_thread.daemon = True
