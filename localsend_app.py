@@ -1,7 +1,6 @@
 import sys
 import os
 import logging
-import json
 from PyQt5.QtWidgets import (QApplication, QMessageBox, QFileDialog, 
                             QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                             QPushButton, QRadioButton, QButtonGroup)
@@ -16,113 +15,38 @@ from file_transfer import FileTransferServer, FileTransferClient
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("SendNowApp")
 
-class ConfigManager:
-    """配置管理类，处理应用程序配置的保存和读取"""
+def create_message_box(parent, icon, title, text):
+    """创建高对比度的消息框"""
+    msg_box = QMessageBox(parent)
+    msg_box.setIcon(icon)
+    msg_box.setWindowTitle(title)
+    msg_box.setText(text)
     
-    CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".sendnow_config")
-    DEFAULT_SAVE_DIR = os.path.expanduser("~/Downloads/SendNow")
-    
-    @staticmethod
-    def load_config():
-        """加载配置信息"""
-        config = {
-            "device_name": None,
-            "device_id": None,
-            "save_dir": ConfigManager.DEFAULT_SAVE_DIR
+    # 设置高对比度样式
+    msg_box.setStyleSheet("""
+        QMessageBox {
+            background-color: #151829;
+            color: #FFFFFF;
         }
-        
-        try:
-            if os.path.exists(ConfigManager.CONFIG_FILE):
-                with open(ConfigManager.CONFIG_FILE, "r") as f:
-                    content = f.read().strip()
-                    
-                    # 尝试解析为JSON格式（新格式）
-                    try:
-                        loaded_config = json.loads(content)
-                        config.update(loaded_config)
-                    except json.JSONDecodeError:
-                        # 兼容旧格式（name,id）
-                        parts = content.split(",")
-                        if len(parts) >= 2:
-                            config["device_name"] = parts[0]
-                            config["device_id"] = parts[1]
-        except Exception as e:
-            logger.error(f"加载配置失败: {str(e)}")
-        
-        return config
+        QLabel {
+            color: #FFFFFF;
+            font-size: 14px;
+        }
+        QPushButton {
+            background-color: #2E355F;
+            color: #FFFFFF;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            font-size: 14px;
+            min-width: 80px;
+        }
+        QPushButton:hover {
+            background-color: #3A4273;
+        }
+    """)
     
-    @staticmethod
-    def save_config(config):
-        """保存配置信息"""
-        try:
-            # 确保配置是字典格式
-            if not isinstance(config, dict):
-                logger.error("无效的配置格式")
-                return False
-            
-            # 保存为JSON格式
-            with open(ConfigManager.CONFIG_FILE, "w") as f:
-                json.dump(config, f)
-            
-            logger.info("配置已保存")
-            return True
-        
-        except Exception as e:
-            logger.error(f"保存配置失败: {str(e)}")
-            return False
-    
-    @staticmethod
-    def get_name_and_id():
-        """获取设备名称和ID"""
-        config = ConfigManager.load_config()
-        
-        name = config.get("device_name")
-        device_id = config.get("device_id")
-        
-        # 如果没有名称和ID，生成新的
-        if not name or not device_id:
-            name = DeviceNameGenerator.generate_name()
-            device_id = DeviceNameGenerator.generate_id(name)
-            
-            # 更新并保存配置
-            config["device_name"] = name
-            config["device_id"] = device_id
-            ConfigManager.save_config(config)
-        
-        return name, device_id
-    
-    @staticmethod
-    def get_save_dir():
-        """获取保存目录"""
-        config = ConfigManager.load_config()
-        save_dir = config.get("save_dir", ConfigManager.DEFAULT_SAVE_DIR)
-        
-        # 确保目录存在
-        try:
-            os.makedirs(save_dir, exist_ok=True)
-        except:
-            # 如果目录创建失败，使用默认目录
-            save_dir = ConfigManager.DEFAULT_SAVE_DIR
-            os.makedirs(save_dir, exist_ok=True)
-        
-        return save_dir
-    
-    @staticmethod
-    def set_save_dir(directory):
-        """设置保存目录"""
-        try:
-            # 加载当前配置
-            config = ConfigManager.load_config()
-            
-            # 更新保存目录
-            config["save_dir"] = directory
-            
-            # 保存配置
-            return ConfigManager.save_config(config)
-        
-        except Exception as e:
-            logger.error(f"设置保存目录失败: {str(e)}")
-            return False
+    return msg_box
 
 class FileReceiveDialog(QDialog):
     """文件接收确认对话框"""
@@ -131,10 +55,12 @@ class FileReceiveDialog(QDialog):
         super().__init__(parent)
         self.file_info = file_info
         self.save_dir = None
-        self.parent = parent
         
-        # 获取默认保存路径（将在setup_ui中设置）
-        self.default_save_dir = None
+        # 获取默认保存路径
+        if parent and hasattr(parent, 'transfer_server'):
+            self.default_save_dir = parent.transfer_server.save_dir
+        else:
+            self.default_save_dir = os.path.expanduser("~/Downloads/SendNow")
         
         self.setup_ui()
     
@@ -144,12 +70,39 @@ class FileReceiveDialog(QDialog):
         self.setMinimumWidth(400)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         
-        # 获取最新的默认保存路径
-        if self.parent and hasattr(self.parent, 'transfer_server'):
-            self.default_save_dir = self.parent.transfer_server.save_dir
-        else:
-            # 如果无法从父窗口获取，则从配置获取
-            self.default_save_dir = ConfigManager.get_save_dir()
+        # 设置高对比度样式
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #151829;
+                color: #FFFFFF;
+            }
+            QLabel {
+                color: #FFFFFF;
+                font-size: 14px;
+            }
+            QRadioButton {
+                color: #FFFFFF;
+                font-size: 14px;
+            }
+            QPushButton {
+                background-color: #2E355F;
+                color: #FFFFFF;
+                border: none;
+                padding: 8px 15px;
+                border-radius: 4px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #3A4273;
+            }
+            QPushButton#accept_button {
+                background-color: #4F6FFF;
+                font-weight: bold;
+            }
+            QPushButton#accept_button:hover {
+                background-color: #5D7DFF;
+            }
+        """)
         
         # 主布局
         layout = QVBoxLayout(self)
@@ -215,6 +168,7 @@ class FileReceiveDialog(QDialog):
         self.accept_button = QPushButton("接收文件")
         self.accept_button.setAutoDefault(True)
         self.accept_button.setDefault(True)
+        self.accept_button.setObjectName("accept_button")  # 设置对象名以应用特定样式
         
         button_layout.addWidget(self.reject_button)
         button_layout.addStretch()
@@ -230,13 +184,10 @@ class FileReceiveDialog(QDialog):
     def on_custom_toggled(self, checked):
         """用户切换到自定义保存位置"""
         if checked:
-            # 优先使用当前默认保存路径作为起始目录
-            start_dir = self.default_save_dir if self.default_save_dir else os.path.expanduser("~/Downloads")
-            
             dir_path = QFileDialog.getExistingDirectory(
                 self, 
                 "选择保存位置", 
-                start_dir
+                os.path.expanduser("~/Downloads")
             )
             
             if dir_path:
@@ -254,17 +205,14 @@ class SendNowApp(MainWindow):
         super().__init__()
         
         # 获取或生成设备名称和ID
-        self.device_name, self.device_id = ConfigManager.get_name_and_id()
+        self.device_name, self.device_id = DeviceNameGenerator.get_persistent_name_and_id()
         logger.info(f"设备信息: {self.device_name} {self.device_id}")
         
         # 初始化网络发现模块
         self.network_discovery = NetworkDiscovery(self.device_name, self.device_id)
         
-        # 获取默认保存路径
-        save_dir = ConfigManager.get_save_dir()
-        
         # 初始化文件传输服务器
-        self.transfer_server = FileTransferServer(save_dir=save_dir)
+        self.transfer_server = FileTransferServer()
         
         # 初始化文件传输客户端
         self.transfer_client = FileTransferClient()
@@ -273,7 +221,7 @@ class SendNowApp(MainWindow):
         self.connect_signals()
         
         # 设置设置面板中的保存路径
-        self.settingsPanel.savePathEdit.setText(save_dir)
+        self.settingsPanel.savePathEdit.setText(self.transfer_server.save_dir)
         
         # 启动服务
         self.start_services()
@@ -422,13 +370,8 @@ class SendNowApp(MainWindow):
         result = dialog.exec_()
         
         if result == QDialog.Accepted:
-            # 用户接受文件传输，优先使用用户选择的目录，否则使用最新的默认目录
-            if dialog.save_dir:
-                save_dir = dialog.save_dir
-            else:
-                # 确保使用最新的默认保存路径
-                save_dir = self.transfer_server.save_dir
-                
+            # 用户接受文件传输
+            save_dir = dialog.save_dir if dialog.save_dir else self.transfer_server.save_dir
             client_address = (file_info['sender'], 0)  # 端口为0，因为这里不重要
             
             # 获取客户端传过来的文件信息
@@ -492,7 +435,8 @@ class SendNowApp(MainWindow):
         self.receivePanel.statusPanel.actionsWidget.setVisible(False)
         
         # 显示错误提示
-        QMessageBox.warning(self, "接收失败", f"文件 {filename} 接收失败:\n{error}")
+        msg_box = create_message_box(self, QMessageBox.Warning, "接收失败", f"文件 {filename} 接收失败:\n{error}")
+        msg_box.exec_()
     
     # ===== 发送客户端事件处理 =====
     
@@ -527,7 +471,8 @@ class SendNowApp(MainWindow):
         self.sendPanel.sendButton.setText("发送文件")
         
         # 显示成功消息
-        QMessageBox.information(self, "发送成功", f"文件 {filename} 已成功发送!")
+        msg_box = create_message_box(self, QMessageBox.Information, "发送成功", f"文件 {filename} 已成功发送!")
+        msg_box.exec_()
     
     def on_client_transfer_failed(self, filename, error):
         """处理客户端传输失败事件"""
@@ -538,7 +483,8 @@ class SendNowApp(MainWindow):
         self.sendPanel.sendButton.setText("发送文件")
         
         # 显示错误提示
-        QMessageBox.warning(self, "发送失败", f"文件 {filename} 发送失败:\n{error}")
+        msg_box = create_message_box(self, QMessageBox.Warning, "发送失败", f"文件 {filename} 发送失败:\n{error}")
+        msg_box.exec_()
     
     # ===== UI事件处理 =====
     
@@ -589,7 +535,8 @@ class SendNowApp(MainWindow):
         selected_devices = self.sendPanel.deviceList.selectedItems()
         
         if not selected_files or not selected_devices:
-            QMessageBox.warning(self, "发送失败", "请选择要发送的文件和目标设备")
+            msg_box = create_message_box(self, QMessageBox.Warning, "发送失败", "请选择要发送的文件和目标设备")
+            msg_box.exec_()
             return
         
         # 获取第一个选中的文件和设备
@@ -601,7 +548,8 @@ class SendNowApp(MainWindow):
         device_data = device_item.data(Qt.UserRole)
         
         if not file_path or not device_data or not os.path.exists(file_path):
-            QMessageBox.warning(self, "发送失败", "文件不存在或设备信息无效")
+            msg_box = create_message_box(self, QMessageBox.Warning, "发送失败", "文件不存在或设备信息无效")
+            msg_box.exec_()
             return
         
         # 获取设备IP
@@ -609,7 +557,8 @@ class SendNowApp(MainWindow):
         device_port = device_data.get('port', 45679)  # 默认端口
         
         if not device_ip:
-            QMessageBox.warning(self, "发送失败", "设备IP地址无效")
+            msg_box = create_message_box(self, QMessageBox.Warning, "发送失败", "设备IP地址无效")
+            msg_box.exec_()
             return
         
         # 开始发送文件
@@ -617,7 +566,8 @@ class SendNowApp(MainWindow):
         success = self.transfer_client.send_file(file_path, device_ip, device_port)
         
         if not success:
-            QMessageBox.warning(self, "发送失败", "无法启动文件传输，请稍后再试")
+            msg_box = create_message_box(self, QMessageBox.Warning, "发送失败", "无法启动文件传输，请稍后再试")
+            msg_box.exec_()
     
     def on_browse_save_dir(self):
         """处理浏览保存目录按钮点击事件"""
@@ -625,30 +575,21 @@ class SendNowApp(MainWindow):
         directory = QFileDialog.getExistingDirectory(
             self,
             "选择文件保存目录",
-            ConfigManager.get_save_dir()
+            self.transfer_server.save_dir
         )
         
         if directory:
-            # 设置新的保存目录 (先在服务器上设置)
+            # 设置新的保存目录
             success = self.transfer_server.set_save_directory(directory)
             
             if success:
-                # 更新配置
-                ConfigManager.set_save_dir(directory)
-                
                 # 更新设置面板中的显示
                 self.settingsPanel.savePathEdit.setText(directory)
-                
-                # 确保配置已被保存 - 刷新接收面板相关设置
-                # （如果接收面板中有需要更新的控件，在这里更新）
-                
                 logger.info(f"已更新默认保存路径: {directory}")
-                
-                # 显示成功提示（可选）
-                QMessageBox.information(self, "设置已保存", f"默认保存路径已更新为:\n{directory}")
             else:
                 # 显示错误信息
-                QMessageBox.warning(self, "设置失败", f"无法设置保存目录: {directory}\n请确保该目录可写入。")
+                msg_box = create_message_box(self, QMessageBox.Warning, "设置失败", f"无法设置保存目录: {directory}\n请确保该目录可写入。")
+                msg_box.exec_()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
