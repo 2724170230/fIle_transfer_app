@@ -1,7 +1,6 @@
 import sys
 import os
 import logging
-import threading
 from PyQt5.QtWidgets import (QApplication, QMessageBox, QFileDialog, 
                             QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                             QPushButton, QRadioButton, QButtonGroup)
@@ -283,23 +282,9 @@ class SendNowApp(MainWindow):
     
     def closeEvent(self, event):
         """窗口关闭事件"""
-        # 立即接受关闭事件，使窗口立即关闭
+        # 停止所有服务
+        self.stop_services()
         event.accept()
-        
-        # 创建后台线程执行网络清理操作，避免阻塞UI
-        def background_cleanup():
-            # 发送离线通知，确保其他设备及时知道本设备已关闭
-            if hasattr(self, 'network_discovery') and self.network_discovery:
-                self.network_discovery.broadcast_offline()
-                
-            # 停止所有服务
-            self.stop_services()
-            
-            logger.info("应用退出，后台清理完成")
-        
-        # 启动后台线程，使用daemon=True确保主程序退出时线程也会退出
-        cleanup_thread = threading.Thread(target=background_cleanup, daemon=True)
-        cleanup_thread.start()
     
     # ===== 网络发现事件处理 =====
     
@@ -539,29 +524,12 @@ class SendNowApp(MainWindow):
         
         elif checked and sender == self.receivePanel.offButton:
             logger.info("接收模式: 关闭")
-            
-            # 先更新UI，立即响应用户操作
+            # 停止服务
+            self.transfer_server.stop()
             # 停止Logo动画
             self.receivePanel.logoWidget.setActive(False)
             # 重置状态面板（带淡出效果）
             self.receivePanel.resetStatusPanel()
-            
-            # 创建后台线程处理网络操作，避免阻塞UI
-            def background_shutdown():
-                # 先发送离线通知，让其他设备立即知道本设备已关闭
-                if hasattr(self, 'network_discovery') and self.network_discovery:
-                    self.network_discovery.broadcast_offline()
-                
-                # 停止服务
-                self.transfer_server.stop()
-                # 完全停止网络发现服务
-                self.network_discovery.stop()
-                
-                logger.info("后台关闭服务完成")
-            
-            # 启动后台线程
-            shutdown_thread = threading.Thread(target=background_shutdown, daemon=True)
-            shutdown_thread.start()
     
     def on_device_selected(self, item):
         """处理设备列表项选择事件"""
