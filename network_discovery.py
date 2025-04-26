@@ -16,6 +16,10 @@ logger = logging.getLogger("NetworkDiscovery")
 DISCOVERY_PORT = 45678
 SERVICE_PORT = 45679
 
+# 消息类型定义
+MSG_TYPE_ANNOUNCE = "announce"  # 设备广播
+MSG_TYPE_OFFLINE = "offline"    # 设备离线通知
+
 class DeviceInfo:
     """设备信息类"""
     
@@ -69,7 +73,7 @@ class NetworkDiscovery(QObject):
         # 网络参数
         self.broadcast_interval = 5.0  # 广播间隔(秒)
         self.socket_timeout = 0.5      # 套接字接收超时
-        self.device_timeout = 60.0     # 设备超时时间(秒)，从30秒增加到60秒，减少网络波动影响
+        self.device_timeout = 15.0     # 设备超时时间(秒)，从60秒减少到15秒，加快超时处理
         
         # 线程
         self.discovery_thread = None
@@ -104,6 +108,9 @@ class NetworkDiscovery(QObject):
         if not self.is_running:
             return
         
+        # 发送离线通知
+        self.broadcast_offline()
+        
         self.is_running = False
         self.statusChanged.emit("正在停止设备发现服务...")
         
@@ -121,6 +128,45 @@ class NetworkDiscovery(QObject):
         self.devices.clear()
         self.statusChanged.emit("设备发现服务已停止")
         logger.info("设备发现服务已停止")
+    
+    def broadcast_offline(self):
+        """广播设备离线消息，让其他设备立即知道本设备已关闭"""
+        try:
+            # 创建UDP广播套接字
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.settimeout(self.socket_timeout)
+            
+            # 构建离线消息
+            message = {
+                "type": MSG_TYPE_OFFLINE,
+                "name": self.device_name,
+                "id": self.device_id,
+                "port": self.service_port
+            }
+            
+            # 获取所有网络接口的广播地址
+            broadcast_addresses = self._get_broadcast_addresses()
+            
+            # 广播离线消息到所有网络接口，重复发送3次以确保可靠接收
+            logger.info(f"发送设备离线广播: {self.device_name} ({self.device_id})")
+            data = json.dumps(message).encode('utf-8')
+            
+            for _ in range(3):  # 发送3次以增加可靠性
+                for broadcast_address in broadcast_addresses:
+                    try:
+                        sock.sendto(data, (broadcast_address, self.discovery_port))
+                    except Exception as e:
+                        logger.error(f"发送离线广播到 {broadcast_address} 时出错: {str(e)}")
+                time.sleep(0.1)  # 间隔100毫秒
+                
+        except Exception as e:
+            logger.error(f"广播离线消息时出错: {str(e)}")
+        finally:
+            try:
+                sock.close()
+            except:
+                pass
     
     def _discovery_loop(self):
         """设备发现循环"""
@@ -207,7 +253,7 @@ class NetworkDiscovery(QObject):
                         self.deviceLost.emit(device)
                     
                     # 休眠
-                    time.sleep(5)
+                    time.sleep(2)  # 从5秒减少到2秒，更频繁地检查超时设备
                 
                 except Exception as e:
                     logger.error(f"清理过期设备时出错: {str(e)}")
@@ -224,6 +270,9 @@ class NetworkDiscovery(QObject):
             # 解析收到的JSON数据
             message = json.loads(data.decode('utf-8'))
             
+            # 提取消息类型
+            msg_type = message.get('type', MSG_TYPE_ANNOUNCE)  # 默认为广播类型
+            
             # 提取设备信息
             device_name = message.get('name', 'Unknown Device')
             device_id = message.get('id', '')
@@ -233,7 +282,20 @@ class NetworkDiscovery(QObject):
             # 忽略自己的广播
             if device_id == self.device_id:
                 return
+                
+            # 处理离线消息
+            if msg_type == MSG_TYPE_OFFLINE:
+                # 检查设备是否在列表中
+                if device_id in self.devices:
+                    device = self.devices[device_id]
+                    # 从设备列表中移除
+                    del self.devices[device_id]
+                    logger.info(f"收到设备离线通知: {device_name} ({device_id}) - {device_ip}")
+                    # 触发设备离线信号
+                    self.deviceLost.emit(device)
+                return
             
+            # 处理设备广播消息
             # 创建或更新设备信息
             device = DeviceInfo(device_name, device_id, device_ip, device_port)
             is_new_device = device_id not in self.devices
@@ -261,6 +323,7 @@ class NetworkDiscovery(QObject):
         try:
             # 准备广播消息
             message = {
+                "type": MSG_TYPE_ANNOUNCE,
                 "name": self.device_name,
                 "id": self.device_id,
                 "port": self.service_port

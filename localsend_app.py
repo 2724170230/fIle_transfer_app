@@ -282,6 +282,10 @@ class SendNowApp(MainWindow):
     
     def closeEvent(self, event):
         """窗口关闭事件"""
+        # 发送离线通知，确保其他设备及时知道本设备已关闭
+        if hasattr(self, 'network_discovery') and self.network_discovery:
+            self.network_discovery.broadcast_offline()
+            
         # 停止所有服务
         self.stop_services()
         event.accept()
@@ -524,8 +528,15 @@ class SendNowApp(MainWindow):
         
         elif checked and sender == self.receivePanel.offButton:
             logger.info("接收模式: 关闭")
+            # 先发送离线通知，让其他设备立即知道本设备已关闭
+            # 广播离线消息可以确保其他设备在3秒内看不到该设备
+            if hasattr(self, 'network_discovery') and self.network_discovery:
+                self.network_discovery.broadcast_offline()
+            
             # 停止服务
             self.transfer_server.stop()
+            # 完全停止网络发现服务（此处将会再次发送离线广播）
+            self.network_discovery.stop()
             # 停止Logo动画
             self.receivePanel.logoWidget.setActive(False)
             # 重置状态面板（带淡出效果）
