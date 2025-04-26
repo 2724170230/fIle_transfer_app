@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 import logging
 from PyQt5.QtWidgets import QApplication, QMessageBox, QFileDialog
 from PyQt5.QtCore import Qt, QTimer
@@ -12,6 +13,9 @@ from file_transfer import FileTransferServer, FileTransferClient
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("SendNowApp")
 
+# 配置文件路径
+CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".sendnow_settings.json")
+
 class SendNowApp(MainWindow):
     """SendNow应用主类，集成UI、网络发现和文件传输功能"""
     
@@ -22,11 +26,15 @@ class SendNowApp(MainWindow):
         self.device_name, self.device_id = DeviceNameGenerator.get_persistent_name_and_id()
         logger.info(f"设备信息: {self.device_name} {self.device_id}")
         
+        # 读取配置文件
+        self.settings = self.load_settings()
+        
         # 初始化网络发现模块
         self.network_discovery = NetworkDiscovery(self.device_name, self.device_id)
         
-        # 初始化文件传输服务器
-        self.transfer_server = FileTransferServer()
+        # 初始化文件传输服务器（使用配置中的保存路径）
+        save_dir = self.settings.get("save_directory")
+        self.transfer_server = FileTransferServer(save_dir=save_dir)
         
         # 初始化文件传输客户端
         self.transfer_client = FileTransferClient()
@@ -39,6 +47,36 @@ class SendNowApp(MainWindow):
         
         # 启动服务
         self.start_services()
+    
+    def load_settings(self):
+        """从配置文件加载设置"""
+        default_settings = {
+            "save_directory": os.path.join(os.path.expanduser("~"), "Downloads")
+        }
+        
+        try:
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, 'r') as f:
+                    settings = json.load(f)
+                    # 确保所有必要的设置项都存在
+                    for key, value in default_settings.items():
+                        if key not in settings:
+                            settings[key] = value
+                    return settings
+        except Exception as e:
+            logger.error(f"加载配置文件失败: {str(e)}")
+        
+        # 如果配置文件不存在或读取失败，返回默认设置
+        return default_settings
+    
+    def save_settings(self):
+        """保存设置到配置文件"""
+        try:
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(self.settings, f)
+            logger.info("设置已保存到配置文件")
+        except Exception as e:
+            logger.error(f"保存配置文件失败: {str(e)}")
     
     def connect_signals(self):
         """连接所有的信号和槽"""
@@ -92,6 +130,9 @@ class SendNowApp(MainWindow):
     
     def closeEvent(self, event):
         """窗口关闭事件"""
+        # 保存设置
+        self.save_settings()
+        
         # 停止所有服务
         self.stop_services()
         event.accept()
@@ -363,6 +404,9 @@ class SendNowApp(MainWindow):
             if success:
                 # 更新设置面板显示
                 self.settingsPanel.savePathEdit.setText(directory)
+                # 更新设置并保存到配置文件
+                self.settings["save_directory"] = directory
+                self.save_settings()
                 logger.info(f"文件保存目录已更改为: {directory}")
             else:
                 QMessageBox.warning(self, "设置失败", "无法设置保存目录，请确保目录存在且可写")
