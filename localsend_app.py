@@ -22,6 +22,13 @@ class FileReceiveDialog(QDialog):
         super().__init__(parent)
         self.file_info = file_info
         self.save_dir = None
+        
+        # 获取默认保存路径
+        if parent and hasattr(parent, 'transfer_server'):
+            self.default_save_dir = parent.transfer_server.save_dir
+        else:
+            self.default_save_dir = os.path.expanduser("~/Downloads/SendNow")
+        
         self.setup_ui()
     
     def setup_ui(self):
@@ -71,7 +78,7 @@ class FileReceiveDialog(QDialog):
         layout.addSpacing(10)
         
         # 保存选项
-        self.default_radio = QRadioButton("保存到默认位置")
+        self.default_radio = QRadioButton(f"保存到默认位置: {self.default_save_dir}")
         self.custom_radio = QRadioButton("选择其他位置...")
         
         self.button_group = QButtonGroup(self)
@@ -296,7 +303,7 @@ class SendNowApp(MainWindow):
         
         if result == QDialog.Accepted:
             # 用户接受文件传输
-            save_dir = dialog.save_dir
+            save_dir = dialog.save_dir if dialog.save_dir else self.transfer_server.save_dir
             client_address = (file_info['sender'], 0)  # 端口为0，因为这里不重要
             
             # 获取客户端传过来的文件信息
@@ -501,11 +508,12 @@ class SendNowApp(MainWindow):
             success = self.transfer_server.set_save_directory(directory)
             
             if success:
-                # 更新设置面板显示
+                # 更新设置面板中的显示
                 self.settingsPanel.savePathEdit.setText(directory)
-                logger.info(f"文件保存目录已更改为: {directory}")
+                logger.info(f"已更新默认保存路径: {directory}")
             else:
-                QMessageBox.warning(self, "设置失败", "无法设置保存目录，请确保目录存在且可写")
+                # 显示错误信息
+                QMessageBox.warning(self, "设置失败", f"无法设置保存目录: {directory}\n请确保该目录可写入。")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

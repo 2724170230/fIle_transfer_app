@@ -1282,17 +1282,8 @@ class SendPanel(QWidget):
             
     def simulateDeviceFound(self):
         """模拟发现设备"""
-        # 添加几个模拟设备
-        devices = [
-            {"name": "高速猎豹", "id": "#42", "ip": "192.168.1.105"},
-            {"name": "量子星辰", "id": "#17", "ip": "192.168.1.120"},
-            {"name": "闪耀流星", "id": "#83", "ip": "192.168.1.136"},
-        ]
-        
-        for device in devices:
-            item = QListWidgetItem(f"{device['name']} {device['id']} ({device['ip']})")
-            item.setData(Qt.UserRole, device)  # 存储设备信息
-            self.deviceList.addItem(item)
+        # 不再添加模拟设备
+        devices = []
         
         # 更新搜索状态
         self.searchStatusLabel.setText(f"找到 {len(devices)} 个设备")
