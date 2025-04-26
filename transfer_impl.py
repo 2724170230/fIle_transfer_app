@@ -10,12 +10,115 @@ from queue import Queue
 from typing import Dict, List, Tuple, Optional, Callable, Any, Set
 import struct
 import traceback
+import subprocess
+import sys
 
 from network import NetworkManager, Message, MessageType, DeviceInfo, BUFFER_SIZE, TRANSFER_PORT
 from transfer import TransferManager, TransferTask, FileInfo
 
 # 配置日志
 logger = logging.getLogger("SendNow.TransferImpl")
+
+def debug_system_info():
+    """收集系统信息用于调试"""
+    info = []
+    info.append(f"Python版本: {sys.version}")
+    info.append(f"平台: {sys.platform}")
+    
+    # 检查用户目录
+    home = os.path.expanduser("~")
+    info.append(f"用户主目录: {home}")
+    
+    # 检查下载目录
+    download_dir = os.path.join(home, "Downloads")
+    app_download_dir = os.path.join(download_dir, "SendNow")
+    
+    info.append(f"下载目录: {download_dir} (存在: {os.path.exists(download_dir)})")
+    info.append(f"程序下载目录: {app_download_dir} (存在: {os.path.exists(app_download_dir)})")
+    
+    # 检查目录权限
+    if os.path.exists(download_dir):
+        info.append(f"下载目录权限: {'可写' if os.access(download_dir, os.W_OK) else '不可写'}")
+    
+    if os.path.exists(app_download_dir):
+        info.append(f"程序下载目录权限: {'可写' if os.access(app_download_dir, os.W_OK) else '不可写'}")
+        # 尝试列出目录内容
+        try:
+            files = os.listdir(app_download_dir)
+            info.append(f"程序下载目录内容: {files}")
+        except Exception as e:
+            info.append(f"列出程序下载目录内容失败: {e}")
+    
+    # 检查临时目录
+    import tempfile
+    temp_dir = tempfile.gettempdir()
+    info.append(f"临时目录: {temp_dir} (存在: {os.path.exists(temp_dir)})")
+    if os.path.exists(temp_dir):
+        info.append(f"临时目录权限: {'可写' if os.access(temp_dir, os.W_OK) else '不可写'}")
+    
+    # 检查磁盘空间
+    try:
+        if sys.platform == 'win32':
+            free_bytes = ctypes.c_ulonglong(0)
+            ctypes.windll.kernel32.GetDiskFreeSpaceExW(ctypes.c_wchar_p(download_dir), None, None, ctypes.pointer(free_bytes))
+            info.append(f"下载目录可用空间: {free_bytes.value / (1024 * 1024 * 1024):.2f} GB")
+        else:
+            import shutil
+            total, used, free = shutil.disk_usage(download_dir)
+            info.append(f"下载目录可用空间: {free / (1024 * 1024 * 1024):.2f} GB")
+    except Exception as e:
+        info.append(f"获取磁盘空间信息失败: {e}")
+    
+    # 返回收集的信息
+    return "\n".join(info)
+
+# 在模块导入时输出系统信息
+logger.info(f"系统信息:\n{debug_system_info()}")
+
+def list_directory(directory):
+    """列出目录内容，返回详细信息"""
+    try:
+        if not os.path.exists(directory):
+            return f"目录不存在: {directory}"
+        
+        if not os.path.isdir(directory):
+            return f"路径不是目录: {directory}"
+        
+        result = f"目录: {directory}\n"
+        
+        # 尝试使用系统命令获取更详细信息
+        try:
+            if sys.platform == 'win32':
+                cmd = ['dir', '/a', directory]
+                shell = True
+            else:
+                cmd = ['ls', '-la', directory]
+                shell = False
+            
+            proc = subprocess.run(cmd, capture_output=True, text=True, shell=shell)
+            if proc.returncode == 0:
+                return result + proc.stdout
+            else:
+                result += f"系统命令失败: {proc.stderr}\n"
+        except Exception as e:
+            result += f"执行系统命令失败: {e}\n"
+        
+        # 回退到Python方法
+        files = os.listdir(directory)
+        for f in files:
+            full_path = os.path.join(directory, f)
+            try:
+                stats = os.stat(full_path)
+                size = stats.st_size
+                mtime = time.ctime(stats.st_mtime)
+                file_type = "目录" if os.path.isdir(full_path) else "文件"
+                result += f"{f:30} {file_type:6} {size:10} 字节 {mtime}\n"
+            except Exception as e:
+                result += f"{f:30} - 无法获取信息: {e}\n"
+        
+        return result
+    except Exception as e:
+        return f"列出目录 {directory} 失败: {e}"
 
 def compute_file_hash(file_obj, algorithm='md5', chunk_size=8192):
     """
@@ -359,6 +462,10 @@ def _handle_file_info(self, message: Message, client_sock: socket.socket, client
         logger.error("无效的文件信息消息")
         return
     
+    # 记录当前系统状态，特别是目录信息
+    logger.info(f"===== 准备接收文件时的系统状态 =====")
+    logger.info(f"系统信息:\n{debug_system_info()}")
+    
     file_data = payload["file_info"]
     transfer_id = file_data.get("transfer_id")
     
@@ -427,6 +534,25 @@ def _handle_file_info(self, message: Message, client_sock: socket.socket, client
         # 如果默认保存目录未设置，使用用户下载目录
         save_dir = os.path.join(os.path.expanduser("~"), "Downloads", "SendNow")
     
+    # 检查和记录保存目录详情
+    logger.info(f"准备创建/验证保存目录: {save_dir}")
+    logger.info(f"保存目录详细信息:\n{list_directory(os.path.dirname(save_dir))}")
+    
+    # 创建SendNow子目录
+    if not os.path.exists(save_dir):
+        try:
+            logger.info(f"保存目录不存在，尝试创建: {save_dir}")
+            os.makedirs(save_dir, exist_ok=True)
+            logger.info(f"保存目录创建成功: {save_dir}")
+        except Exception as e:
+            logger.error(f"创建保存目录失败: {e}")
+            # 尝试使用父目录
+            save_dir = os.path.dirname(save_dir)
+            logger.info(f"将使用父目录作为保存目录: {save_dir}")
+
+    # 记录创建后的目录状态
+    logger.info(f"保存目录状态:\n{list_directory(save_dir)}")
+    
     # 确保保存目录是绝对路径
     save_dir = os.path.abspath(save_dir)
     
@@ -436,6 +562,14 @@ def _handle_file_info(self, message: Message, client_sock: socket.socket, client
     
     # 构建完整保存路径
     full_save_path = os.path.join(save_dir, file_name)
+    logger.info(f"完整保存路径: {full_save_path}")
+    
+    # 如果文件已存在，添加时间戳避免冲突
+    if os.path.exists(full_save_path):
+        base_name, extension = os.path.splitext(file_name)
+        new_file_name = f"{base_name}_{int(time.time())}{extension}"
+        full_save_path = os.path.join(save_dir, new_file_name)
+        logger.info(f"文件已存在，将使用新名称: {full_save_path}")
     
     # 创建保存目录
     try:
@@ -459,7 +593,7 @@ def _handle_file_info(self, message: Message, client_sock: socket.socket, client
     
     # 设置文件保存路径
     file_info.save_path = full_save_path
-    file_info.file_name = file_name  # 更新可能已更改的文件名
+    file_info.file_name = os.path.basename(full_save_path)  # 更新可能已更改的文件名
     # 保存断点续传位置信息
     file_info.resume_offset = resume_offset
     task.file_info = file_info
@@ -756,6 +890,15 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         if not task.file_info or not task.file_info.save_path:
             raise ValueError(f"任务{task.transfer_id}的文件信息未设置或保存路径无效")
         
+        # 打印完整的任务信息
+        logger.info(f"===== 文件接收详细信息 =====")
+        logger.info(f"任务ID: {task.transfer_id}")
+        logger.info(f"文件名: {task.file_info.file_name}")
+        logger.info(f"文件大小: {task.file_info.file_size} 字节")
+        logger.info(f"保存路径: {task.file_info.save_path}")
+        logger.info(f"文件哈希: {task.file_info.file_hash}")
+        logger.info(f"==============================")
+        
         # 设置任务状态为正在接收
         task.status = "receiving"
         task.file_info.status = "receiving"
@@ -765,20 +908,35 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         save_dir = os.path.dirname(save_path)
         
         try:
+            logger.info(f"尝试创建保存目录: {save_dir}")
             os.makedirs(save_dir, exist_ok=True)
-            logger.info(f"已确保保存目录存在: {save_dir}")
+            logger.info(f"保存目录已创建/存在: {save_dir}")
+            
+            # 验证目录是否确实存在
+            if not os.path.exists(save_dir):
+                logger.error(f"目录创建失败，路径不存在: {save_dir}")
+                raise OSError(f"无法创建目录: {save_dir}")
+                
+            logger.info(f"检查目录是否可写入: {save_dir}")
+            if not os.access(save_dir, os.W_OK):
+                logger.error(f"无权限写入目录: {save_dir}")
+                raise PermissionError(f"无权限写入: {save_dir}")
+            logger.info(f"保存目录可写入: {save_dir}")
         except Exception as e:
             logger.error(f"创建保存目录失败: {e}")
             # 尝试使用临时目录
             import tempfile
             temp_dir = tempfile.gettempdir()
+            old_path = save_path
             save_path = os.path.join(temp_dir, os.path.basename(save_path))
             save_dir = temp_dir
             task.file_info.save_path = save_path
-            logger.info(f"改用临时目录: {temp_dir}, 新保存路径: {save_path}")
+            logger.info(f"改用临时目录: {temp_dir}")
+            logger.info(f"更新保存路径: {old_path} -> {save_path}")
             
             # 再次尝试创建目录
             os.makedirs(save_dir, exist_ok=True)
+            logger.info(f"临时目录已创建/存在: {save_dir}")
         
         # 检查目录写入权限
         if not os.access(save_dir, os.W_OK):
@@ -786,14 +944,18 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
             # 尝试使用临时目录
             import tempfile
             temp_dir = tempfile.gettempdir()
+            old_path = save_path
             save_path = os.path.join(temp_dir, os.path.basename(save_path))
             save_dir = temp_dir
             task.file_info.save_path = save_path
-            logger.info(f"改用临时目录: {temp_dir}, 新保存路径: {save_path}")
+            logger.info(f"改用临时目录: {temp_dir}")
+            logger.info(f"更新保存路径: {old_path} -> {save_path}")
             
             # 检查临时目录权限
             if not os.access(temp_dir, os.W_OK):
+                logger.error(f"无法写入任何目录: {save_dir}, {temp_dir}")
                 raise PermissionError(f"无法写入任何目录: {save_dir}, {temp_dir}")
+            logger.info(f"临时目录可写入: {temp_dir}")
         
         # 创建临时文件名，用于部分下载
         temp_file_path = f"{save_path}.part"
@@ -823,14 +985,18 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
             bytes_received = 0
             resume_offset = 0
         
-        logger.info(f"正在接收文件数据到临时文件: {temp_file_path}，从位置 {bytes_received} 开始")
+        logger.info(f"正在接收文件数据到临时文件: {temp_file_path}，从位置 {bytes_received} 开始，模式: {file_mode}")
         
         # 打开文件进行写入
         try:
+            logger.info(f"尝试打开临时文件进行写入: {temp_file_path}")
             with open(temp_file_path, file_mode) as f:
+                logger.info(f"成功打开临时文件: {temp_file_path}")
+                
                 # 如果是追加模式，确保文件指针在正确位置
                 if file_mode == 'ab':
                     f.seek(0, 2)  # 移动到文件末尾
+                    logger.info(f"文件指针已移动到末尾(追加模式)")
                 
                 # 接收数据块直到文件接收完成
                 while bytes_received < expected_size:
@@ -838,6 +1004,7 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                     try:
                         # 如果套接字无效，抛出异常
                         if not client_sock:
+                            logger.error("套接字对象为空")
                             raise ConnectionError("套接字为空")
                         
                         # 设置30秒超时并检查套接字状态
@@ -862,6 +1029,7 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                     
                     try:
                         # 接收数据块头部(数据块大小)
+                        logger.debug("尝试接收数据块头部")
                         header = recv_all(client_sock, 4)
                         if not header or len(header) < 4:
                             logger.error(f"接收文件头错误，收到: {header}")
@@ -874,10 +1042,11 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                         
                         # 解析数据块大小
                         chunk_size = struct.unpack("!I", header)[0]
-                        logger.debug(f"接收数据块，大小: {chunk_size} 字节")
+                        logger.debug(f"成功接收数据块头部，块大小: {chunk_size} 字节")
                         
                         # 接收数据块
                         if chunk_size > 0:
+                            logger.debug(f"开始接收数据块，大小: {chunk_size} 字节")
                             chunk = recv_all(client_sock, chunk_size)
                             if not chunk or len(chunk) < chunk_size:
                                 logger.error(f"接收数据块错误，预期大小: {chunk_size}，实际大小: {len(chunk) if chunk else 0}")
@@ -892,10 +1061,12 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                             retry_count = 0
                             
                             # 写入文件
+                            logger.debug(f"接收到数据块，大小: {len(chunk)} 字节，正在写入文件")
                             f.write(chunk)
                             # 确保数据写入磁盘
                             f.flush()
                             os.fsync(f.fileno())
+                            logger.debug("数据已写入磁盘")
                             
                             bytes_received += len(chunk)
                             
@@ -929,6 +1100,7 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                 # 最后一次进度更新，确保显示100%
                 task.update_progress(bytes_received)
                 logger.info(f"文件接收完成: {task.file_info.file_name}，大小: {bytes_received} 字节")
+                logger.info(f"临时文件已完成: {temp_file_path}")
         except PermissionError as e:
             logger.error(f"无权限写入文件: {temp_file_path}, 错误: {e}")
             raise
@@ -937,60 +1109,93 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
             raise
         
         # 验证接收到的数据大小
+        logger.info(f"验证接收到的数据大小: 预期 {expected_size}，实际 {bytes_received}")
         if bytes_received != expected_size:
             logger.error(f"文件大小不匹配: 预期 {expected_size}，实际接收 {bytes_received}")
             task.status = "failed"
             task.error_message = "文件大小不匹配"
             if os.path.exists(temp_file_path):
+                logger.info(f"删除不完整文件: {temp_file_path}")
                 os.remove(temp_file_path)  # 删除不完整文件
             return
+        
+        # 检查临时文件是否存在和大小是否正确
+        if os.path.exists(temp_file_path):
+            temp_size = os.path.getsize(temp_file_path)
+            logger.info(f"临时文件验证: {temp_file_path}, 大小: {temp_size} 字节")
+            if temp_size != expected_size:
+                logger.error(f"临时文件大小不匹配: 预期 {expected_size}，实际 {temp_size}")
+                # 尝试继续处理
+        else:
+            logger.error(f"临时文件不存在: {temp_file_path}")
+            raise FileNotFoundError(f"临时文件不存在: {temp_file_path}")
         
         # 验证文件哈希(如果有)
         if task.file_info.file_hash:
             try:
+                logger.info(f"开始验证文件哈希值: {task.file_info.file_hash}")
                 with open(temp_file_path, 'rb') as f:
                     file_hash = compute_file_hash(f)
+                    logger.info(f"计算得到的哈希值: {file_hash}")
                     if file_hash != task.file_info.file_hash:
                         logger.error(f"文件哈希不匹配: 预期 {task.file_info.file_hash}，计算得到 {file_hash}")
                         task.status = "failed"
                         task.error_message = "文件哈希不匹配"
                         os.remove(temp_file_path)  # 删除不完整文件
                         return
+                    logger.info("文件哈希验证通过")
             except Exception as e:
                 logger.error(f"计算文件哈希值出错: {e}")
                 # 继续处理，不因哈希计算失败而中断
         
         # 将临时文件重命名为最终文件名
         try:
+            logger.info(f"准备将临时文件重命名为最终文件: {temp_file_path} -> {save_path}")
             # 确保目标文件不存在
             if os.path.exists(save_path):
                 try:
+                    logger.info(f"目标文件已存在，尝试删除: {save_path}")
                     os.remove(save_path)
                     logger.info(f"已删除现有的目标文件: {save_path}")
                 except Exception as e:
                     logger.error(f"删除现有文件失败: {e}")
                     # 尝试使用另一个文件名
                     base_name, extension = os.path.splitext(save_path)
-                    save_path = f"{base_name}_{int(time.time())}{extension}"
+                    new_path = f"{base_name}_{int(time.time())}{extension}"
+                    logger.info(f"将使用新的文件名: {save_path} -> {new_path}")
+                    save_path = new_path
                     task.file_info.save_path = save_path
-                    logger.info(f"将使用新的文件名: {save_path}")
             
             # 重命名文件
+            logger.info(f"执行重命名操作: {temp_file_path} -> {save_path}")
             os.rename(temp_file_path, save_path)
-            logger.info(f"已将临时文件重命名为最终文件: {save_path}")
+            logger.info(f"重命名成功: {temp_file_path} -> {save_path}")
             
             # 验证文件是否确实存在
-            if not os.path.exists(save_path):
+            if os.path.exists(save_path):
+                logger.info(f"最终文件验证: 文件存在: {save_path}")
+                final_size = os.path.getsize(save_path)
+                logger.info(f"最终文件大小: {final_size} 字节")
+                if final_size != expected_size:
+                    logger.error(f"最终文件大小不匹配: 预期 {expected_size}，实际 {final_size}")
+                    # 继续处理，不因大小不匹配而失败
+                else:
+                    logger.info(f"最终文件大小正确: {final_size} 字节")
+            else:
                 logger.error(f"重命名后的文件不存在: {save_path}")
                 raise FileNotFoundError(f"重命名后的文件不存在: {save_path}")
             
-            # 检查文件大小
-            final_size = os.path.getsize(save_path)
-            if final_size != expected_size:
-                logger.error(f"最终文件大小不匹配: 预期 {expected_size}，实际 {final_size}")
-                # 继续处理，不因大小不匹配而失败
-            else:
-                logger.info(f"最终文件大小正确: {final_size} 字节")
+            # 执行 ls 命令查看文件是否在文件系统中可见
+            try:
+                logger.info(f"执行系统命令验证文件: ls -la {save_path}")
+                result = subprocess.run(['ls', '-la', save_path], 
+                                       capture_output=True, text=True)
+                if result.returncode == 0:
+                    logger.info(f"系统命令验证结果: 文件存在\n{result.stdout.strip()}")
+                else:
+                    logger.error(f"系统命令验证失败: {result.stderr.strip()}")
+            except Exception as e:
+                logger.error(f"执行系统命令验证时出错: {e}")
         except Exception as e:
             logger.error(f"重命名文件失败: {e}")
             task.status = "failed"
@@ -1002,11 +1207,15 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         task.file_info.status = "completed"
         # 确保进度显示为100%
         task.update_progress(expected_size)
-        logger.info(f"文件接收任务完成: {task.transfer_id}, 文件: {task.file_info.file_name}, 保存在: {save_path}")
+        logger.info(f"文件接收任务完成: {task.transfer_id}")
+        logger.info(f"文件: {task.file_info.file_name}")
+        logger.info(f"保存在: {save_path}")
+        logger.info(f"大小: {os.path.getsize(save_path) if os.path.exists(save_path) else 'unknown'} 字节")
         
         # 发送完成确认消息
         try:
             self._send_transfer_complete(task)
+            logger.info("已发送完成确认消息")
         except Exception as e:
             logger.warning(f"发送完成确认消息失败: {e}")
             # 继续执行，不影响本地文件保存
