@@ -806,6 +806,9 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
                 # 定位到文件的当前发送位置
                 f.seek(bytes_sent)
                 
+                # 保留发送前的偏移量，确保使用准确的位置
+                current_offset = bytes_sent
+                
                 # 计算本次发送的大小
                 size_to_send = min(chunk_size, file_size - bytes_sent)
                 
@@ -820,20 +823,20 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
                     transfer_id_bytes = transfer_id.encode('utf-8')
                     transfer_id_len = min(len(transfer_id_bytes), 255)  # 限制ID长度不超过255
                     
-                    # 构建头部
+                    # 构建头部，使用保存的准确偏移量
                     header = struct.pack(
                         '!4sIQB', 
-                        BLOCK_MAGIC,                # 魔数：4字节
-                        len(chunk),                # 数据块大小：4字节无符号整数
-                        bytes_sent,                # 偏移量：8字节无符号整数
-                        transfer_id_len            # 传输ID长度：1字节
+                        BLOCK_MAGIC,          # 魔数：4字节
+                        len(chunk),           # 数据块大小：4字节无符号整数
+                        current_offset,       # 偏移量：8字节无符号整数
+                        transfer_id_len       # 传输ID长度：1字节
                     ) + transfer_id_bytes[:transfer_id_len]  # 传输ID：变长，最多255字节
                     
                     # 发送数据块头部
                     client_sock.sendall(header)
                     
                     # 打印调试信息
-                    logger.debug(f"已发送数据块头部: size={len(chunk)}, offset={bytes_sent}, ID长度={transfer_id_len}")
+                    logger.debug(f"已发送数据块头部: size={len(chunk)}, offset={current_offset}, ID长度={transfer_id_len}")
                     
                     # 发送数据
                     client_sock.sendall(chunk)
@@ -1177,8 +1180,59 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                         # 验证偏移量（应该等于已接收的字节数）
                         if offset != bytes_received:
                             logger.warning(f"数据块偏移量不匹配: 预期 {bytes_received}，收到 {offset}")
-                            # 我们仍然继续接收，但记录这个问题
                             
+                            # 检查是否是更新的数据块（偏移量大于当前接收位置）
+                            if offset > bytes_received:
+                                # 当前位置和数据块偏移量之间有空白，填充零
+                                gap_size = offset - bytes_received
+                                if gap_size > 10 * 1024 * 1024:  # 超过10MB的缺口认为是错误
+                                    logger.error(f"偏移量差异过大 ({gap_size} 字节)，可能是错误数据")
+                                    if retry_count >= max_retries:
+                                        raise ConnectionError("偏移量差异过大")
+                                    retry_count += 1
+                                    time.sleep(2)
+                                    continue
+                                
+                                logger.warning(f"数据存在缺口，填充 {gap_size} 字节的零")
+                                f.write(b'\0' * gap_size)
+                                bytes_received = offset  # 更新已接收字节数到当前偏移量
+                            elif offset < bytes_received:
+                                # 收到了旧数据块，检查是否为重复
+                                if offset + chunk_size <= bytes_received:
+                                    # 完全重复的数据块，跳过
+                                    logger.warning(f"跳过完全重复的数据块: 偏移量={offset}, 大小={chunk_size}")
+                                    
+                                    # 接收但不处理数据块
+                                    dummy_chunk = recv_all(client_sock, chunk_size)
+                                    if not dummy_chunk or len(dummy_chunk) < chunk_size:
+                                        logger.error("接收重复数据块失败")
+                                        if retry_count >= max_retries:
+                                            raise ConnectionError("接收重复数据块失败")
+                                        retry_count += 1
+                                        time.sleep(2)
+                                    continue
+                                else:
+                                    # 部分重叠的数据块，计算新数据的起始位置
+                                    overlap = bytes_received - offset
+                                    logger.warning(f"数据块部分重叠 {overlap} 字节，调整接收位置")
+                                    
+                                    # 接收完整数据块
+                                    full_chunk = recv_all(client_sock, chunk_size)
+                                    if not full_chunk or len(full_chunk) < chunk_size:
+                                        logger.error("接收重叠数据块失败")
+                                        if retry_count >= max_retries:
+                                            raise ConnectionError("接收重叠数据块失败")
+                                        retry_count += 1
+                                        time.sleep(2)
+                                        continue
+                                    
+                                    # 只使用非重叠部分
+                                    chunk = full_chunk[overlap:]
+                                    chunk_size = len(chunk)
+                                    
+                                    # 更新用于日志的偏移量
+                                    offset = bytes_received
+                        
                         logger.debug(f"成功接收数据块头部，块大小: {chunk_size} 字节，偏移量: {offset}")
                         
                         # 接收数据块
