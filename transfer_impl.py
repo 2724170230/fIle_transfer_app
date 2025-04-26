@@ -120,13 +120,13 @@ def list_directory(directory):
     except Exception as e:
         return f"列出目录 {directory} 失败: {e}"
 
-def compute_file_hash(file_obj, algorithm='md5', chunk_size=8192):
+def compute_file_hash(file_obj, algorithm='sha256', chunk_size=8192):
     """
     计算文件的哈希值
     
     Args:
         file_obj: 已打开的文件对象
-        algorithm: 哈希算法，默认md5
+        algorithm: 哈希算法，默认sha256
         chunk_size: 读取文件的块大小
         
     Returns:
