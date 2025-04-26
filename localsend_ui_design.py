@@ -8,10 +8,9 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, 
                              QProgressBar, QListWidget, QListWidgetItem, QStackedWidget, 
                              QFrame, QSplitter, QGridLayout, QSpacerItem, QSizePolicy,
-                             QButtonGroup, QToolButton, QAction, QToolTip)
+                             QButtonGroup, QToolButton, QAction)
 from PyQt5.QtCore import Qt, QSize, pyqtSignal, QMimeData, QUrl, QTimer, QRect, QPoint, QPointF, QPropertyAnimation, QEasingCurve
 from PyQt5.QtGui import QIcon, QColor, QPalette, QFont, QDrag, QPainter, QPen, QBrush, QPainterPath, QRadialGradient, QLinearGradient, QTransform
-import platform
 
 # 更高对比度的赛博朋克风格色调
 DARK_BG = "#10111E"        # 更深的导航栏背景色
@@ -902,58 +901,6 @@ class ReceivePanel(QWidget):
         # 获取设备名称和ID
         self.device_name, self.device_id = DeviceNameGenerator.get_persistent_name_and_id()
         
-        # 创建一个标题栏部件，包含信息按钮
-        titleBarWidget = QWidget()
-        titleBarLayout = QHBoxLayout(titleBarWidget)
-        titleBarLayout.setContentsMargins(0, 0, 0, 0)
-        
-        # 添加信息按钮到右上角
-        self.infoButton = QToolButton()
-        self.infoButton.setText("i")
-        # 移除默认的工具提示，完全依赖自定义事件过滤器实现
-        # self.infoButton.setToolTip("设备信息")
-        self.infoButton.setFixedSize(28, 28)  # 固定大小的圆形按钮
-        self.infoButton.setStyleSheet(f"""
-            QToolButton {{
-                background-color: {ACCENT_COLOR};
-                color: {TEXT_COLOR};
-                border: none;
-                border-radius: 14px;
-                font-size: 16px;
-                font-weight: bold;
-                font-family: 'Arial';
-                min-width: 28px;
-                min-height: 28px;
-                padding: 0px;
-                margin: 0px;
-            }}
-            QToolButton:hover {{
-                background-color: {HIGHLIGHT_COLOR};
-            }}
-            QToolTip {{
-                background-color: {PANEL_BG};
-                color: {TEXT_COLOR};
-                border: 1px solid {BORDER_COLOR};
-                border-radius: 4px;
-                padding: 6px;
-                font-size: 13px;
-            }}
-        """)
-        
-        # 获取本机IP地址和端口
-        self.local_ip = "正在获取..."
-        self.service_port = 45679  # 默认端口
-        
-        # 更新鼠标悬停提示信息
-        self.infoButton.installEventFilter(self)
-        
-        # 布局标题栏，将信息按钮放在右侧
-        titleBarLayout.addStretch()
-        titleBarLayout.addWidget(self.infoButton)
-        
-        # 添加标题栏到内容布局的顶部
-        contentLayout.addWidget(titleBarWidget)
-        
         # 添加动态标志
         logoContainer = QWidget()
         logoLayout = QVBoxLayout(logoContainer)
@@ -1084,93 +1031,8 @@ class ReceivePanel(QWidget):
         self.onButton.toggled.connect(self.onSwitchToggled)
         self.offButton.toggled.connect(self.onSwitchToggled)
         
-        # 获取本机IP地址
-        self.update_local_ip()
-        
         # 测试状态面板显示 - 开发时使用
         # QTimer.singleShot(1000, self.simulateReceive)
-    
-    def eventFilter(self, obj, event):
-        """事件过滤器，用于更新鼠标悬停的信息按钮提示"""
-        from PyQt5.QtCore import QEvent
-        import platform
-        
-        if obj == self.infoButton:
-            if event.type() == QEvent.Enter:
-                # 获取系统主机名
-                hostname = platform.node()
-                
-                # 构建美观的HTML格式设备信息提示
-                tooltip_html = f"""
-                <div style='margin: 0px; padding: 5px;'>
-                    <div style='color: {SECONDARY_TEXT_COLOR};'>设备名称</div>
-                    <div style='color: {TEXT_COLOR}; margin-bottom: 10px;'><b>{self.device_name}</b></div>
-                    
-                    <div style='color: {SECONDARY_TEXT_COLOR};'>计算机名称</div>
-                    <div style='color: {TEXT_COLOR}; margin-bottom: 10px;'><b>{hostname}</b></div>
-                    
-                    <div style='color: {SECONDARY_TEXT_COLOR};'>IP地址</div>
-                    <div style='color: {TEXT_COLOR}; margin-bottom: 10px;'><b>{self.local_ip}</b></div>
-                    
-                    <div style='color: {SECONDARY_TEXT_COLOR};'>端口</div>
-                    <div style='color: {TEXT_COLOR};'><b>{self.service_port}</b></div>
-                </div>
-                """
-                
-                # 获取按钮在屏幕上的位置
-                button_pos = self.infoButton.mapToGlobal(self.infoButton.rect().topLeft())
-                
-                # 获取主窗口的几何信息，确保tooltip在窗口内显示
-                main_window = self.window()
-                window_rect = main_window.geometry()
-                
-                # 计算tooltip的合适位置
-                tooltip_pos = button_pos
-                
-                # 将tooltip向左移动，确保在窗口内
-                tooltip_pos.setX(min(tooltip_pos.x(), window_rect.right() - 250))  # 假设tooltip宽度约为250
-                
-                # 确保tooltip在窗口高度范围内
-                if tooltip_pos.y() + 200 > window_rect.bottom():  # 假设tooltip高度约为200
-                    tooltip_pos.setY(window_rect.bottom() - 200)
-                
-                # 强制显示自定义工具提示在计算好的位置
-                QToolTip.showText(tooltip_pos, tooltip_html, self.infoButton)
-                return True
-            # 防止其他事件处理器隐藏我们的工具提示
-            elif event.type() == QEvent.Leave:
-                # 当鼠标离开按钮区域时，不立即隐藏提示，让QToolTip自然消失
-                pass
-                
-        return super().eventFilter(obj, event)
-    
-    def update_local_ip(self):
-        """更新本机IP地址"""
-        import socket
-        try:
-            # 创建一个临时套接字连接到互联网，获取本机IP
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            # 使用一个公共DNS服务器作为目标
-            s.connect(("8.8.8.8", 80))
-            self.local_ip = s.getsockname()[0]
-            s.close()
-        except:
-            # 如果无法连接外网，尝试获取本地IP
-            try:
-                # 尝试获取所有网络接口
-                hostname = socket.gethostname()
-                addresses = socket.getaddrinfo(hostname, None)
-                
-                # 过滤出IPv4地址，排除localhost地址
-                ip_list = [addr[4][0] for addr in addresses 
-                          if addr[0] == socket.AF_INET and not addr[4][0].startswith('127.')]
-                
-                if ip_list:
-                    self.local_ip = ip_list[0]  # 使用第一个非localhost的IPv4地址
-                else:
-                    self.local_ip = socket.gethostbyname(hostname)
-            except:
-                self.local_ip = "未知"
     
     def simulateReceive(self):
         """模拟接收文件，用于开发测试"""
@@ -1737,10 +1599,6 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(900, 600)  # 最小窗口尺寸
         self.resize(self.DEFAULT_WIDTH, self.DEFAULT_HEIGHT)  # 设置默认大小
         
-        # 设置应用程序图标
-        app_icon = QIcon("icons/sendnow_logo.svg")
-        self.setWindowIcon(app_icon)
-        
         # 设置应用风格
         self.setStyleSheet(f"""
             QMainWindow, QWidget {{
@@ -1850,9 +1708,6 @@ class MainWindow(QMainWindow):
     def onNavButtonClicked(self, button):
         """处理导航按钮点击事件"""
         if button == self.receiveButton:
-            # 在显示接收面板前更新IP地址信息
-            self.receivePanel.update_local_ip()
-            # 注意：正确的端口信息会在SendNowApp初始化时设置
             self.stack.setCurrentWidget(self.receivePanel)
         elif button == self.sendButton:
             self.stack.setCurrentWidget(self.sendPanel)
@@ -1881,11 +1736,6 @@ class MainWindow(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    
-    # 设置应用程序图标
-    app_icon = QIcon("icons/sendnow_logo.svg")
-    app.setWindowIcon(app_icon)
-    
     window = MainWindow()
     window.show()
     sys.exit(app.exec_()) 
