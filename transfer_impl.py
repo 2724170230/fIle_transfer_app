@@ -12,6 +12,7 @@ import struct
 import traceback
 import subprocess
 import sys
+import shutil
 
 from network import NetworkManager, Message, MessageType, DeviceInfo, BUFFER_SIZE, TRANSFER_PORT
 from transfer import TransferManager, TransferTask, FileInfo
@@ -63,7 +64,6 @@ def debug_system_info():
             ctypes.windll.kernel32.GetDiskFreeSpaceExW(ctypes.c_wchar_p(download_dir), None, None, ctypes.pointer(free_bytes))
             info.append(f"下载目录可用空间: {free_bytes.value / (1024 * 1024 * 1024):.2f} GB")
         else:
-            import shutil
             total, used, free = shutil.disk_usage(download_dir)
             info.append(f"下载目录可用空间: {free / (1024 * 1024 * 1024):.2f} GB")
     except Exception as e:
@@ -1202,13 +1202,23 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         
         # 将临时文件重命名为最终文件
         try:
+            # 确保目标目录存在
+            final_dir = os.path.dirname(save_path)
+            if not os.path.exists(final_dir):
+                os.makedirs(final_dir, exist_ok=True)
+                logger.info(f"创建目标目录: {final_dir}")
+
             # 如果目标文件已存在，先删除
             if os.path.exists(save_path):
                 logger.info(f"目标文件已存在，正在删除: {save_path}")
                 os.remove(save_path)
             
             logger.info(f"将临时文件重命名为最终文件: {temp_file_path} -> {save_path}")
+            # 确保文件系统操作完成
+            os.fsync(os.open(os.path.dirname(temp_file_path), os.O_RDONLY))
             os.rename(temp_file_path, save_path)
+            # 再次确保文件系统操作完成
+            os.fsync(os.open(os.path.dirname(save_path), os.O_RDONLY))
             logger.info(f"文件保存成功: {save_path}")
             
             # 验证最终文件是否存在及大小是否正确
@@ -1222,10 +1232,10 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                 raise FileNotFoundError(f"无法找到最终文件: {save_path}")
         except Exception as e:
             logger.error(f"重命名临时文件失败: {e}")
+            logger.error(traceback.format_exc())
             
             # 尝试用复制方式替代重命名
             try:
-                import shutil
                 logger.info(f"尝试通过复制方式创建最终文件: {temp_file_path} -> {save_path}")
                 shutil.copy2(temp_file_path, save_path)
                 logger.info(f"文件复制成功: {save_path}")
@@ -1379,7 +1389,7 @@ def _send_transfer_complete(self, task: TransferTask):
     try:
         # 构建完成消息
         complete_message = {
-            "transfer_id": task.task_id,
+            "transfer_id": task.transfer_id,
             "completed": True,
             "file_id": task.file_info.file_id,
             "file_hash": task.file_info.file_hash
