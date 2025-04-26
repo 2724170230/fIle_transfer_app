@@ -615,34 +615,58 @@ class DeviceSearchWidget(QWidget):
         self.searchLabel.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 16px;")
         
         # 创建动画指示器
-        self.animationWidget = AnimationWidget(self)
+        self.animationWidget = QWidget()
         self.animationWidget.setFixedSize(40, 40)
+        self.animationWidget.setStyleSheet("background-color: transparent;")
         
         # 添加到布局
         layout.addWidget(self.animationWidget, 0, Qt.AlignCenter)
         layout.addWidget(self.searchLabel)
         
+        # 设置计时器更新动画
+        self.angle = 0
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.updateAnimation)
+        self.timer.start(50)  # 每50毫秒更新一次
+        
         # 设置样式
         self.setMinimumHeight(80)
-        self.setStyleSheet(f"""
-            background-color: {PANEL_BG};
-            border-radius: 8px;
-        """)
+        self.setStyleSheet("background-color: #35353A; border-radius: 8px;")
     
     def paintEvent(self, event):
         """绘制背景"""
+        super().paintEvent(event)
+        
+        # 绘制背景
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
         # 创建渐变
         gradient = QLinearGradient(0, 0, self.width(), 0)
-        gradient.setColorAt(0, QColor(PANEL_BG))
-        gradient.setColorAt(1, QColor(INNER_BG))
+        gradient.setColorAt(0, QColor("#35353A"))
+        gradient.setColorAt(1, QColor("#3A3A40"))
         
         # 填充背景
-        path = QPainterPath()
-        path.addRoundedRect(self.rect(), 8, 8)
-        painter.fillPath(path, gradient)
+        painter.fillRect(self.rect(), QBrush(gradient))
+    
+    def updateAnimation(self):
+        """更新动画状态"""
+        self.angle = (self.angle + 10) % 360
+        self.animationWidget.update()
+    
+    def paintEvent(self, event):
+        """绘制组件"""
+        super().paintEvent(event)
+    
+    def resizeEvent(self, event):
+        """调整大小时居中动画组件"""
+        super().resizeEvent(event)
+        
+        # 居中动画组件
+        self.animationWidget.move(
+            (self.width() - self.animationWidget.width()) // 2,
+            10
+        )
 
 class AnimationWidget(QWidget):
     """旋转动画组件"""
@@ -699,9 +723,6 @@ class ReceivePanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)  # 增加边距
         
-        # 网络管理器（由主应用传入）
-        self.network_manager = None
-
         # 创建一个内容容器
         contentWidget = QWidget()
         contentLayout = QVBoxLayout(contentWidget)
@@ -800,7 +821,8 @@ class ReceivePanel(QWidget):
         contentWidget.setStyleSheet(f"""
             background-color: {PANEL_BG};
             border-radius: 12px;
-            border: 1px solid {BORDER_COLOR};
+            border: none;
+            box-shadow: 0px 3px 10px rgba(0, 0, 0, 0.2);
         """)
         
         # 添加到主布局
@@ -846,76 +868,8 @@ class ReceivePanel(QWidget):
             # 确定是哪个按钮被选中
             if self.sender() == self.onButton:
                 self.logoWidget.setActive(True)
-                # 开启接收服务
-                if self.network_manager:
-                    self.network_manager.start_server()
             else:  # offButton
                 self.logoWidget.setActive(False)
-                # 关闭接收服务
-                if self.network_manager:
-                    self.network_manager.stop_server()
-                    
-    def set_network_manager(self, network_manager):
-        """设置网络管理器"""
-        self.network_manager = network_manager
-        
-        # 如果当前开关是开启状态，启动服务器
-        if self.onButton.isChecked() and self.network_manager:
-            self.network_manager.start_server()
-    
-    def updateProgress(self, filename, progress):
-        """更新进度条"""
-        self.statusPanel.showProgress(filename)
-        self.statusPanel.progressBar.setValue(progress)
-        
-    def fileReceived(self, file_path):
-        """文件接收完成"""
-        file_name = os.path.basename(file_path)
-        self.statusPanel.showCompleted(file_name)
-        
-        # 连接"打开文件"和"打开文件夹"按钮事件
-        self.statusPanel.openFileButton.clicked.connect(
-            lambda: self.openFile(file_path)
-        )
-        self.statusPanel.openFolderButton.clicked.connect(
-            lambda: self.openFolder(os.path.dirname(file_path))
-        )
-        
-    def openFile(self, file_path):
-        """打开文件"""
-        # 使用系统默认应用打开文件
-        import subprocess
-        import platform
-        
-        try:
-            if platform.system() == 'Darwin':  # macOS
-                subprocess.call(('open', file_path))
-            elif platform.system() == 'Windows':  # Windows
-                os.startfile(file_path)
-            else:  # Linux
-                subprocess.call(('xdg-open', file_path))
-                
-            print(f"已打开文件: {file_path}")
-        except Exception as e:
-            print(f"打开文件失败: {e}")
-    
-    def openFolder(self, folder_path):
-        """打开文件夹"""
-        # 使用系统默认文件管理器打开文件夹
-        import subprocess
-        import platform
-        
-        try:
-            if platform.system() == 'Darwin':  # macOS
-                subprocess.call(('open', folder_path))
-            elif platform.system() == 'Windows':  # Windows
-                os.startfile(folder_path)
-            else:  # Linux
-                subprocess.call(('xdg-open', folder_path))
-                
-            print(f"已打开文件夹: {folder_path}")
-        except Exception as e:
-            print(f"打开文件夹失败: {e}")
 
 class SendPanel(QWidget):
     """发送文件界面"""
@@ -925,9 +879,6 @@ class SendPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)  # 增加边距
         
-        # 网络管理器（由主应用传入）
-        self.network_manager = None
-
         # ===== 顶部区域：附件列表 =====
         topAreaWidget = QWidget()
         topAreaLayout = QVBoxLayout(topAreaWidget)
@@ -1041,7 +992,8 @@ class SendPanel(QWidget):
         topAreaWidget.setStyleSheet(f"""
             background-color: {PANEL_BG};
             border-radius: 8px;
-            border: 1px solid {BORDER_COLOR};
+            border: none;
+            box-shadow: 0px 2px 8px rgba(0, 0, 0, 0.15);
         """)
         
         # ===== 底部区域：附近设备 =====
@@ -1152,7 +1104,8 @@ class SendPanel(QWidget):
         self.deviceSearchWidget.setStyleSheet(f"""
             background-color: {PANEL_BG};
             border-radius: 8px;
-            border: 1px solid {BORDER_COLOR};
+            border: none;
+            box-shadow: 0px 2px 8px rgba(0, 0, 0, 0.15);
         """)
         
         # 添加到主布局
@@ -1331,9 +1284,9 @@ class SendPanel(QWidget):
         """模拟发现设备"""
         # 添加几个模拟设备
         devices = [
-            {"name": "高速猎豹", "id": "#42", "ip": "192.168.1.105", "port": 9999},
-            {"name": "量子星辰", "id": "#17", "ip": "192.168.1.120", "port": 9999},
-            {"name": "闪耀流星", "id": "#83", "ip": "192.168.1.136", "port": 9999},
+            {"name": "高速猎豹", "id": "#42", "ip": "192.168.1.105"},
+            {"name": "量子星辰", "id": "#17", "ip": "192.168.1.120"},
+            {"name": "闪耀流星", "id": "#83", "ip": "192.168.1.136"},
         ]
         
         for device in devices:
@@ -1349,59 +1302,6 @@ class SendPanel(QWidget):
         # 只有在有文件被选中时才启用发送按钮
         selected_items = self.fileList.selectedItems()
         self.sendButton.setEnabled(len(selected_items) > 0)
-        
-    def set_network_manager(self, network_manager):
-        """设置网络管理器"""
-        self.network_manager = network_manager
-        
-    def add_device_to_list(self, device_info):
-        """添加发现的设备到列表"""
-        # 检查设备是否已在列表中
-        for i in range(self.deviceList.count()):
-            item = self.deviceList.item(i)
-            if item.data(Qt.UserRole).get('id') == device_info.get('id'):
-                # 更新现有项
-                item.setText(f"{device_info['name']} {device_info['id']} ({device_info['ip']})")
-                item.setData(Qt.UserRole, device_info)
-                return
-        
-        # 添加新设备
-        item = QListWidgetItem(f"{device_info['name']} {device_info['id']} ({device_info['ip']})")
-        item.setData(Qt.UserRole, device_info)
-        self.deviceList.addItem(item)
-        
-        # 更新搜索状态
-        self.searchStatusLabel.setText(f"找到 {self.deviceList.count()} 个设备")
-        
-    def sendFileToDevice(self):
-        """发送文件到选中设备"""
-        if not self.network_manager:
-            print("错误：网络管理器未设置")
-            return
-            
-        # 获取选中的设备和文件
-        selected_devices = self.deviceList.selectedItems()
-        selected_files = self.fileList.selectedItems()
-        
-        if not selected_devices:
-            print("错误：未选择设备")
-            return
-            
-        if not selected_files:
-            print("错误：未选择文件")
-            return
-        
-        device = selected_devices[0].data(Qt.UserRole)
-        file_path = selected_files[0].data(Qt.UserRole)
-        
-        print(f"准备发送文件: {file_path} 到设备: {device['name']} ({device['ip']})")
-        
-        # 使用NetworkManager发送文件
-        self.network_manager.send_file(
-            device['ip'], 
-            device.get('port', 9999), 
-            file_path
-        )
 
 class SettingsPanel(QWidget):
     """设置界面"""
@@ -1467,7 +1367,8 @@ class SettingsPanel(QWidget):
         contentWidget.setStyleSheet(f"""
             background-color: {PANEL_BG};
             border-radius: 12px;
-            border: 1px solid {BORDER_COLOR};
+            border: none;
+            box-shadow: 0px 3px 10px rgba(0, 0, 0, 0.2);
         """)
         
         # 添加到主布局

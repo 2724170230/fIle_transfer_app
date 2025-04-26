@@ -1,97 +1,136 @@
 import sys
 import os
-from PyQt5.QtWidgets import QApplication, QMainWindow
-from PyQt5.QtCore import Qt, QThread
+import threading
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+                           QHBoxLayout, QPushButton, QLabel, QLineEdit, 
+                           QFileDialog, QProgressBar, QMessageBox)
+from PyQt5.QtCore import Qt
+from file_transfer import FileTransfer
 
-from localsend_ui_design import MainWindow
-from network_manager import NetworkManager
-from device_discovery import DeviceDiscovery
-
-class SendNowApp(QMainWindow):
+class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.ui = MainWindow()
-        self.ui.setupUi(self)
+        self.setWindowTitle("文件传输应用")
+        self.setMinimumSize(500, 300)
         
-        # 初始化网络管理器
-        self.network_manager = NetworkManager(
-            receive_callback=self.on_file_received,
-            progress_callback=self.update_progress
-        )
+        # 创建文件传输实例
+        self.file_transfer = FileTransfer()
+        self.file_transfer.signals.progress_updated.connect(self.update_progress)
+        self.file_transfer.signals.transfer_complete.connect(self.transfer_complete)
+        self.file_transfer.signals.transfer_error.connect(self.transfer_error)
         
-        # 初始化设备发现
-        self.device_discovery = DeviceDiscovery()
+        # 创建主窗口部件
+        self.setup_ui()
         
-        # 启动服务器
-        self.start_server()
-        
-        # 连接信号和槽
-        self.ui.sendButton.clicked.connect(self.send_file)
-        self.ui.refreshButton.clicked.connect(self.refresh_devices)
-        
-    def start_server(self):
-        """在后台线程启动服务器"""
-        self.server_thread = QThread()
-        self.network_manager.moveToThread(self.server_thread)
-        self.server_thread.started.connect(lambda: self.network_manager.start_server())
-        self.server_thread.start()
+        # 创建接收文件目录
+        os.makedirs('received_files', exist_ok=True)
     
-    def update_progress(self, filename, progress):
-        """更新进度条"""
-        self.ui.progressBar.setValue(progress)
-        self.ui.statusLabel.setText(f"正在传输: {filename} ({progress}%)")
+    def setup_ui(self):
+        # 创建中央部件
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        
+        # 创建主布局
+        main_layout = QVBoxLayout(central_widget)
+        
+        # 服务器控制部分
+        server_group = QWidget()
+        server_layout = QHBoxLayout(server_group)
+        self.server_status_label = QLabel("服务器状态：未运行")
+        self.server_button = QPushButton("启动服务器")
+        self.server_button.clicked.connect(self.toggle_server)
+        server_layout.addWidget(self.server_status_label)
+        server_layout.addWidget(self.server_button)
+        main_layout.addWidget(server_group)
+        
+        # 发送文件部分
+        send_group = QWidget()
+        send_layout = QVBoxLayout(send_group)
+        
+        # IP地址输入
+        ip_layout = QHBoxLayout()
+        ip_label = QLabel("目标IP：")
+        self.ip_input = QLineEdit()
+        ip_layout.addWidget(ip_label)
+        ip_layout.addWidget(self.ip_input)
+        send_layout.addLayout(ip_layout)
+        
+        # 文件选择
+        file_layout = QHBoxLayout()
+        self.file_path_label = QLabel("未选择文件")
+        self.select_file_button = QPushButton("选择文件")
+        self.select_file_button.clicked.connect(self.select_file)
+        file_layout.addWidget(self.file_path_label)
+        file_layout.addWidget(self.select_file_button)
+        send_layout.addLayout(file_layout)
+        
+        # 发送按钮
+        self.send_button = QPushButton("发送文件")
+        self.send_button.clicked.connect(self.send_file)
+        send_layout.addWidget(self.send_button)
+        
+        main_layout.addWidget(send_group)
+        
+        # 进度条
+        self.progress_bar = QProgressBar()
+        main_layout.addWidget(self.progress_bar)
+        
+        # 状态标签
+        self.status_label = QLabel("")
+        main_layout.addWidget(self.status_label)
+        
+        # 添加一些弹性空间
+        main_layout.addStretch()
     
-    def on_file_received(self, filepath):
-        """文件接收完成的回调"""
-        self.ui.progressBar.setValue(100)
-        self.ui.statusLabel.setText(f"文件已保存至: {filepath}")
+    def toggle_server(self):
+        if self.server_button.text() == "启动服务器":
+            self.file_transfer.start_server()
+            self.server_button.setText("停止服务器")
+            self.server_status_label.setText("服务器状态：运行中")
+        else:
+            self.file_transfer.stop_server()
+            self.server_button.setText("启动服务器")
+            self.server_status_label.setText("服务器状态：未运行")
+    
+    def select_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "选择文件")
+        if file_path:
+            self.file_path_label.setText(file_path)
     
     def send_file(self):
-        """发送文件"""
-        selected_device = self.ui.deviceList.currentItem()
-        if not selected_device:
-            self.ui.statusLabel.setText("请先选择接收设备")
-            return
-            
-        device_info = selected_device.data(Qt.UserRole)
-        if not device_info:
-            return
-            
-        # 在新线程中发送文件
-        self.sender_thread = QThread()
-        self.network_manager.moveToThread(self.sender_thread)
-        self.sender_thread.started.connect(
-            lambda: self.network_manager.send_file(
-                device_info['ip'],
-                self.ui.filePathEdit.text()
-            )
-        )
-        self.sender_thread.start()
-    
-    def refresh_devices(self):
-        """刷新设备列表"""
-        self.ui.deviceList.clear()
-        self.ui.statusLabel.setText("正在搜索设备...")
+        file_path = self.file_path_label.text()
+        target_ip = self.ip_input.text()
         
-        # 在新线程中搜索设备
-        self.discovery_thread = QThread()
-        self.device_discovery.moveToThread(self.discovery_thread)
-        self.discovery_thread.started.connect(self.device_discovery.discover)
-        self.device_discovery.device_found.connect(self.add_device_to_list)
-        self.discovery_thread.start()
+        if file_path == "未选择文件":
+            QMessageBox.warning(self, "错误", "请先选择要发送的文件")
+            return
+        
+        if not target_ip:
+            QMessageBox.warning(self, "错误", "请输入目标IP地址")
+            return
+        
+        # 在新线程中发送文件
+        self.status_label.setText("正在发送文件...")
+        self.send_button.setEnabled(False)
+        threading.Thread(target=lambda: self.file_transfer.send_file(file_path, target_ip),
+                       daemon=True).start()
     
-    def add_device_to_list(self, device_info):
-        """添加设备到列表"""
-        from PyQt5.QtWidgets import QListWidgetItem
-        item = QListWidgetItem(f"{device_info['name']} ({device_info['ip']})")
-        item.setData(Qt.UserRole, device_info)
-        self.ui.deviceList.addItem(item)
-
-def main():
-    app = QApplication(sys.argv)
-    window = SendNowApp()
-    window.show()
-    sys.exit(app.exec_())
+    def update_progress(self, value):
+        self.progress_bar.setValue(value)
+    
+    def transfer_complete(self, file_name):
+        self.status_label.setText(f"文件 {file_name} 传输完成")
+        self.progress_bar.setValue(100)
+        self.send_button.setEnabled(True)
+        QMessageBox.information(self, "成功", f"文件 {file_name} 传输完成")
+    
+    def transfer_error(self, error_msg):
+        self.status_label.setText(f"传输错误: {error_msg}")
+        self.send_button.setEnabled(True)
+        QMessageBox.critical(self, "错误", f"传输错误: {error_msg}")
 
 if __name__ == '__main__':
-    main() 
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec_()) 
