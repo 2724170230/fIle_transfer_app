@@ -1599,6 +1599,10 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(900, 600)  # 最小窗口尺寸
         self.resize(self.DEFAULT_WIDTH, self.DEFAULT_HEIGHT)  # 设置默认大小
         
+        # 设置应用程序图标
+        app_icon = QIcon("icons/sendnow_logo.svg")
+        self.setWindowIcon(app_icon)
+        
         # 设置应用风格
         self.setStyleSheet(f"""
             QMainWindow, QWidget {{
@@ -1736,6 +1740,11 @@ class MainWindow(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    
+    # 设置应用程序图标
+    app_icon = QIcon("icons/sendnow_logo.svg")
+    app.setWindowIcon(app_icon)
+    
     window = MainWindow()
     window.show()
     sys.exit(app.exec_()) 
