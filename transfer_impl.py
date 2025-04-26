@@ -713,6 +713,22 @@ def _handle_network_message(self, message: Message, addr: Tuple[str, int]):
     # 这里主要处理通过UDP广播收到的控制消息
     if message.msg_type in [MessageType.PAUSE, MessageType.RESUME, MessageType.CANCEL]:
         self._handle_transfer_control(message)
+    elif message.msg_type == MessageType.ERROR:
+        # 检查是否是文件头部验证请求
+        if message.payload.get("action") == "file_header_verify":
+            self._handle_file_header_verify_request(message, addr)
+        # 检查是否是文件头部验证响应
+        elif message.payload.get("action") == "file_header_verify_response":
+            self._handle_file_header_verify_response(message, addr)
+        else:
+            # 其他类型的错误消息处理
+            logger.warning(f"收到错误消息: {message.payload}")
+    elif message.msg_type == MessageType.FILE_HEADER_VERIFY:
+        # 处理文件头部验证请求
+        self._handle_file_header_verify_request(message, addr)
+    elif message.msg_type == MessageType.FILE_HEADER_RESPONSE:
+        # 处理文件头部验证响应
+        self._handle_file_header_verify_response(message, addr)
 
 def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
     """发送文件实现"""
@@ -1464,6 +1480,9 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                     calculated_hash = temp_file_info.calculate_file_hash(temp_file_path)
                     logger.error(f"计算得到的哈希值: {calculated_hash}")
                     
+                    # 请求发送方提供文件头部信息以帮助诊断
+                    self._request_file_header_verification(task, calculated_hash)
+                    
                     # 尝试与发送端沟通，了解实际文件大小和文件头信息
                     logger.info("文件可能已损坏。请让发送方确认文件头部内容以帮助诊断问题。")
                     task.status = "failed"
@@ -1694,6 +1713,204 @@ def _send_transfer_complete(self, task: TransferTask):
     except Exception as e:
         logger.error(f"发送完成消息失败: {e}")
         # 这不影响本地文件的完成状态
+
+def _request_file_header_verification(self, task: TransferTask, calculated_hash: str):
+    """
+    请求发送方提供文件头部内容以进行验证和诊断
+    
+    Args:
+        task: 传输任务
+        calculated_hash: 接收方计算出的文件哈希值
+    """
+    if not task or not task.device:
+        logger.error("无法请求文件头部验证：任务信息不完整")
+        return
+        
+    try:
+        # 创建请求头部内容的消息
+        request_payload = {
+            "transfer_id": task.transfer_id,
+            "file_id": task.file_info.file_id,
+            "action": "file_header_verify",
+            "calculated_hash": calculated_hash,
+            "expected_hash": task.file_info.file_hash
+        }
+        
+        # 使用专门的消息类型
+        verify_message = Message(MessageType.FILE_HEADER_VERIFY, request_payload)
+        
+        # 发送请求
+        logger.info(f"正在向发送方请求文件头部诊断数据: {task.device.device_name}")
+        self.network_manager.send_message(task.device, verify_message)
+        
+        # 记录请求已发送
+        logger.info(f"已发送文件头部诊断请求，等待发送方回应")
+    except Exception as e:
+        logger.error(f"发送文件头部验证请求失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+
+def _handle_file_header_verify_request(self, message: Message, addr: Tuple[str, int]):
+    """
+    处理文件头部验证请求
+    
+    Args:
+        message: 请求消息
+        addr: 发送方地址
+    """
+    payload = message.payload
+    transfer_id = payload.get("transfer_id")
+    file_id = payload.get("file_id")
+    calculated_hash = payload.get("calculated_hash")
+    expected_hash = payload.get("expected_hash")
+    
+    if not transfer_id or not file_id:
+        logger.error("无效的文件头部验证请求: 缺少必要参数")
+        return
+        
+    # 在发送任务中查找对应的文件
+    task = self.send_tasks.get(transfer_id)
+    if not task:
+        logger.error(f"找不到对应的发送任务: {transfer_id}")
+        return
+        
+    if task.file_info.file_id != file_id:
+        logger.error(f"文件ID不匹配: 预期 {task.file_info.file_id}, 收到 {file_id}")
+        return
+        
+    try:
+        # 获取文件头部信息用于诊断
+        file_path = task.file_info.file_path
+        if not file_path or not os.path.exists(file_path):
+            logger.error(f"源文件不存在: {file_path}")
+            return
+            
+        # 读取文件头部(前8KB)用于诊断
+        with open(file_path, 'rb') as f:
+            header_data = f.read(8192)  # 读取前8KB
+            
+            # 计算头部的哈希值
+            header_hash = hashlib.sha256(header_data).hexdigest()
+            
+            # 显示头部的十六进制表示(前256字节)
+            hex_header = ' '.join(f'{b:02x}' for b in header_data[:256])
+            
+            # 获取文件基本信息
+            file_size = os.path.getsize(file_path)
+            
+            # 创建响应消息
+            response_payload = {
+                "transfer_id": transfer_id,
+                "file_id": file_id,
+                "action": "file_header_verify_response",
+                "source_size": file_size,
+                "header_hash": header_hash,
+                "header_hex": hex_header,
+                "file_hash": task.file_info.file_hash
+            }
+            
+            # 使用专门的消息类型
+            response_message = Message(MessageType.FILE_HEADER_RESPONSE, response_payload)
+            
+            # 创建用于回应的设备信息
+            from network import DeviceInfo
+            recipient_device = DeviceInfo(
+                device_id="temp_id",
+                device_name="接收方",
+                ip_address=addr[0],
+                port=addr[1]
+            )
+            
+            # 发送响应
+            logger.info(f"正在发送文件头部诊断数据到: {addr[0]}:{addr[1]}")
+            logger.info(f"文件大小: {file_size} 字节")
+            logger.info(f"头部哈希: {header_hash}")
+            logger.info(f"头部十六进制(部分): {hex_header[:100]}...")
+            
+            # 发送响应
+            self.network_manager.send_message(recipient_device, response_message)
+            logger.info("文件头部诊断数据已发送")
+    except Exception as e:
+        logger.error(f"处理文件头部验证请求失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+
+def _handle_file_header_verify_response(self, message: Message, addr: Tuple[str, int]):
+    """
+    处理接收到的文件头部验证响应
+    
+    Args:
+        message: 响应消息
+        addr: 发送方地址
+    """
+    payload = message.payload
+    transfer_id = payload.get("transfer_id")
+    file_id = payload.get("file_id")
+    source_size = payload.get("source_size")
+    header_hash = payload.get("header_hash")
+    header_hex = payload.get("header_hex")
+    file_hash = payload.get("file_hash")
+    
+    if not transfer_id or not file_id:
+        logger.error("无效的文件头部验证响应: 缺少必要参数")
+        return
+    
+    # 在接收任务中查找对应的文件
+    task = self.receive_tasks.get(transfer_id)
+    if not task:
+        logger.error(f"找不到对应的接收任务: {transfer_id}")
+        return
+    
+    # 记录诊断信息
+    logger.info("=" * 50)
+    logger.info("收到文件头部诊断响应")
+    logger.info(f"传输ID: {transfer_id}")
+    logger.info(f"文件ID: {file_id}")
+    logger.info(f"源文件大小: {source_size} 字节")
+    logger.info(f"头部哈希: {header_hash}")
+    logger.info(f"文件哈希: {file_hash}")
+    logger.info(f"头部十六进制(部分): {header_hex[:100]}...")
+    
+    # 对比本地接收的文件
+    # 如果存在保存的不匹配文件，读取其头部进行对比
+    mismatch_debug_path = f"{task.file_info.save_path}.mismatch"
+    if os.path.exists(mismatch_debug_path):
+        try:
+            with open(mismatch_debug_path, 'rb') as f:
+                local_header = f.read(8192)  # 读取相同大小的头部
+                local_header_hash = hashlib.sha256(local_header).hexdigest()
+                local_header_hex = ' '.join(f'{b:02x}' for b in local_header[:256])
+                
+                logger.info("本地接收文件头部信息:")
+                logger.info(f"本地头部哈希: {local_header_hash}")
+                logger.info(f"本地头部十六进制(部分): {local_header_hex[:100]}...")
+                
+                # 对比头部哈希
+                if header_hash != local_header_hash:
+                    logger.error("文件头部哈希不匹配，文件传输可能存在问题")
+                    # 查找头部差异的位置
+                    min_len = min(len(local_header), len(header_hex.split()))
+                    for i in range(min_len):
+                        remote_byte = int(header_hex.split()[i], 16) if i < len(header_hex.split()) else None
+                        local_byte = local_header[i] if i < len(local_header) else None
+                        
+                        if remote_byte != local_byte:
+                            logger.error(f"在位置 {i} 处发现差异: 源文件={remote_byte:02x}, 本地文件={local_byte:02x}")
+                            # 只报告前10个差异
+                            if i >= 10:
+                                logger.error("差异过多，停止报告")
+                                break
+                else:
+                    logger.info("文件头部哈希匹配，可能是传输过程中后续部分出现问题")
+        except Exception as e:
+            logger.error(f"分析本地文件时出错: {e}")
+    else:
+        logger.warning(f"找不到本地不匹配文件副本: {mismatch_debug_path}")
+    
+    logger.info("=" * 50)
+    logger.info("诊断结论: 请检查网络连接质量，可能由于网络原因导致文件传输过程中数据损坏")
+    logger.info("建议尝试重新传输文件或使用更可靠的网络连接")
+    logger.info("=" * 50)
 
 # 将方法添加到 TransferManager 类
 setattr(TransferManager, "_transfer_server_loop", _transfer_server_loop)

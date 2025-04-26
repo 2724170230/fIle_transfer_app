@@ -39,6 +39,8 @@ class MessageType:
     PAUSE = "PAUSE"                     # 暂停传输
     RESUME = "RESUME"                   # 继续传输
     CANCEL = "CANCEL"                   # 取消传输
+    FILE_HEADER_VERIFY = "FILE_HEADER_VERIFY"  # 文件头部验证请求
+    FILE_HEADER_RESPONSE = "FILE_HEADER_RESP"  # 文件头部验证响应
 
 class DeviceInfo:
     """设备信息类"""
