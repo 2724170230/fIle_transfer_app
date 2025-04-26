@@ -1337,25 +1337,78 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                             # 重置重试计数器，因为接收成功
                             retry_count = 0
                             
-                            # 写入文件
+                            # 写入文件 - 增强版本，确保数据确实写入磁盘
                             logger.debug(f"接收到数据块，大小: {len(chunk)} 字节，正在写入文件")
-                            f.write(chunk)
-                            # 确保数据写入磁盘
-                            f.flush()
-                            os.fsync(f.fileno())
-                            logger.debug("数据已写入磁盘")
                             
-                            # 保存数据到内存中，用于可能的恢复
-                            received_data.extend(chunk)
+                            try:
+                                # 先记录当前文件位置
+                                current_pos = f.tell()
+                                
+                                # 写入数据
+                                bytes_written = f.write(chunk)
+                                
+                                # 立即刷新缓冲区
+                                f.flush()
+                                
+                                # 强制操作系统写入物理介质
+                                os.fsync(f.fileno())
+                                
+                                # 获取新位置
+                                new_pos = f.tell()
+                                actual_written = new_pos - current_pos
+                                
+                                # 验证写入是否完整
+                                if actual_written != len(chunk):
+                                    logger.warning(f"数据块写入不完整: 预期 {len(chunk)} 字节，实际写入 {actual_written} 字节")
+                                    
+                                    # 检查磁盘剩余空间
+                                    import shutil
+                                    disk_usage = shutil.disk_usage(os.path.dirname(temp_file_path))
+                                    free_space = disk_usage.free
+                                    logger.info(f"磁盘剩余空间: {free_space} 字节")
+                                    
+                                    if free_space < chunk_size * 2:
+                                        logger.error("磁盘空间不足，可能导致写入失败")
+                                
+                                # 安全起见，只计算实际写入的字节数
+                                logger.debug(f"实际写入字节数: {actual_written}")
+                                bytes_received += actual_written
+                                
+                                # 将实际写入的数据保存到内存
+                                if actual_written == len(chunk):
+                                    received_data.extend(chunk)
+                                else:
+                                    received_data.extend(chunk[:actual_written])
+                            except Exception as write_error:
+                                logger.error(f"写入文件时出错: {write_error}")
+                                logger.error(traceback.format_exc())
+                                
+                                # 添加更多错误信息
+                                import errno
+                                if isinstance(write_error, IOError) and write_error.errno == errno.ENOSPC:
+                                    logger.error("磁盘空间不足错误")
+                                
+                                # 尽管写入失败，但我们已经接收了数据，保存到内存
+                                received_data.extend(chunk)
+                                
+                                # 记录接收的字节数，即使写入失败
+                                bytes_received += len(chunk)
+                                
+                                if retry_count >= max_retries:
+                                    raise
+                                
+                                retry_count += 1
+                                logger.info(f"写入失败，将在下一次循环中重试 (尝试 {retry_count}/{max_retries})")
+                                continue
                             
-                            bytes_received += len(chunk)
+                            # 更新任务进度
+                            task.update_progress(bytes_received)
                             
                             # 更新进度
                             current_time = time.time()
                             if current_time - last_progress_update >= progress_update_interval:
                                 # 替换对task.progress的直接引用，改用计算的百分比
                                 progress_percent = (bytes_received / expected_size) * 100 if expected_size > 0 else 0
-                                task.update_progress(bytes_received)
                                 last_progress_update = current_time
                                 logger.info(f"文件传输进度: {progress_percent:.2f}%，已接收: {bytes_received}/{expected_size} 字节")
                             
@@ -1395,13 +1448,62 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         
         # 验证接收到的数据大小
         logger.info(f"验证接收到的数据大小: 预期 {expected_size}，实际 {bytes_received}")
+        
+        # 确保文件实际大小与接收字节数匹配
+        if os.path.exists(temp_file_path):
+            # 重新打开文件以确保所有写入内容已同步
+            with open(temp_file_path, 'ab') as f:
+                # 刷新所有可能的缓冲区
+                f.flush()
+                os.fsync(f.fileno())
+            
+            # 再次读取文件大小
+            temp_size = os.path.getsize(temp_file_path)
+            logger.info(f"临时文件验证: {temp_file_path}, 大小: {temp_size} 字节")
+            
+            # 如果文件大小与接收字节数不一致，但我们有完整数据在内存中
+            if temp_size != bytes_received and len(received_data) >= bytes_received:
+                logger.warning(f"文件大小不匹配：接收了{bytes_received}字节，但文件大小为{temp_size}字节")
+                logger.info("尝试从内存缓冲区重新写入文件...")
+                
+                # 从内存重写文件
+                with open(temp_file_path, 'wb') as f:
+                    f.write(received_data[:bytes_received])
+                    f.flush()
+                    os.fsync(f.fileno())
+                
+                # 再次检查文件大小
+                new_size = os.path.getsize(temp_file_path)
+                logger.info(f"重写后文件大小: {new_size} 字节")
+                
+                if new_size == bytes_received:
+                    logger.info("文件修复成功，大小现在匹配")
+                else:
+                    logger.error(f"文件修复失败，大小仍然不匹配：{new_size} vs {bytes_received}")
+            
+            # 更新bytes_received以匹配实际文件大小
+            if temp_size != bytes_received:
+                logger.warning(f"调整bytes_received从{bytes_received}到{temp_size}以匹配文件实际大小")
+                bytes_received = temp_size
+                task.update_progress(bytes_received)
+        
         if bytes_received != expected_size:
             logger.error(f"文件大小不匹配: 预期 {expected_size}，实际接收 {bytes_received}")
             task.status = "failed"
             task.error_message = "文件大小不匹配"
             if os.path.exists(temp_file_path):
+                # 保存不完整文件以备分析
+                incomplete_copy = f"{temp_file_path}.incomplete"
+                try:
+                    import shutil
+                    shutil.copy2(temp_file_path, incomplete_copy)
+                    logger.info(f"已保存不完整文件以供分析: {incomplete_copy}")
+                except Exception as e:
+                    logger.error(f"保存不完整文件副本失败: {e}")
+                
+                # 删除不完整文件
+                os.remove(temp_file_path)
                 logger.info(f"删除不完整文件: {temp_file_path}")
-                os.remove(temp_file_path)  # 删除不完整文件
             return
         
         # 检查临时文件是否存在和大小是否正确
