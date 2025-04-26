@@ -1104,13 +1104,49 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         # 打开文件进行写入
         try:
             logger.info(f"尝试打开临时文件进行写入: {temp_file_path}")
+            
+            # 检查是否需要重新开始接收
+            if file_mode == 'wb' and bytes_received > 0:
+                # 出现逻辑不一致，重置接收位置
+                logger.warning(f"文件模式为wb但bytes_received={bytes_received}，重置为0")
+                bytes_received = 0
+                task.file_info.resume_offset = 0
+            
+            # 如果临时文件已存在但内容可能有问题，备份并重新开始
+            if os.path.exists(temp_file_path) and file_mode == 'wb':
+                backup_path = f"{temp_file_path}.bak.{int(time.time())}"
+                logger.info(f"创建临时文件备份: {backup_path}")
+                try:
+                    import shutil
+                    shutil.copy2(temp_file_path, backup_path)
+                except Exception as e:
+                    logger.error(f"备份临时文件失败: {e}")
+            
             with open(temp_file_path, file_mode) as f:
                 logger.info(f"成功打开临时文件: {temp_file_path}")
                 
                 # 如果是追加模式，确保文件指针在正确位置
                 if file_mode == 'ab':
                     f.seek(0, 2)  # 移动到文件末尾
-                    logger.info(f"文件指针已移动到末尾(追加模式)")
+                    current_pos = f.tell()
+                    logger.info(f"文件指针已移动到末尾(追加模式)，当前位置: {current_pos}")
+                    
+                    # 检查实际文件大小与断点位置是否一致
+                    if current_pos != bytes_received:
+                        logger.warning(f"文件当前位置 ({current_pos}) 与断点续传位置 ({bytes_received}) 不一致")
+                        if current_pos > bytes_received:
+                            logger.warning(f"文件比断点续传位置大，将截断到正确位置")
+                            f.truncate(bytes_received)
+                        else:
+                            logger.warning(f"文件比断点续传位置小，可能丢失数据")
+                            # 更新接收位置以匹配实际文件大小
+                            bytes_received = current_pos
+                
+                # 检查实际文件大小
+                f.flush()
+                os.fsync(f.fileno())
+                actual_size = os.path.getsize(temp_file_path)
+                logger.info(f"文件初始大小: {actual_size} 字节")
                 
                 # 接收数据块直到文件接收完成
                 while bytes_received < expected_size:
@@ -1207,7 +1243,7 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                             
                             # 检查是否是更新的数据块（偏移量大于当前接收位置）
                             if offset > bytes_received:
-                                # 当前位置和数据块偏移量之间有空白，填充零
+                                # 当前位置和数据块偏移量之间有空白，记录警告但不填充零
                                 gap_size = offset - bytes_received
                                 if gap_size > 10 * 1024 * 1024:  # 超过10MB的缺口认为是错误
                                     logger.error(f"偏移量差异过大 ({gap_size} 字节)，可能是错误数据")
@@ -1217,8 +1253,18 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                                     time.sleep(2)
                                     continue
                                 
-                                logger.warning(f"数据存在缺口，填充 {gap_size} 字节的零")
-                                f.write(b'\0' * gap_size)
+                                # 记录错误但不再用零填充，可能导致文件损坏
+                                logger.error(f"文件传输存在数据缺口 {gap_size} 字节，不再填充零。这可能导致文件损坏。")
+                                
+                                # 如果有大量数据缺失，可能是传输出现了严重问题
+                                if gap_size > 1024 * 1024:  # 超过1MB的缺口
+                                    logger.error(f"数据缺口过大，放弃当前传输并重试")
+                                    if retry_count >= max_retries:
+                                        raise ConnectionError("数据缺口过大")
+                                    retry_count += 1
+                                    time.sleep(2)
+                                    continue
+                                    
                                 bytes_received = offset  # 更新已接收字节数到当前偏移量
                             elif offset < bytes_received:
                                 # 收到了旧数据块，检查是否为重复
@@ -1363,6 +1409,37 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                 logger.info(f"临时文件路径: {temp_file_path}")
                 logger.info(f"文件大小: {os.path.getsize(temp_file_path)} 字节")
                 
+                # 检查文件是否为空或包含全零数据
+                with open(temp_file_path, 'rb') as check_f:
+                    first_block = check_f.read(8192)
+                    if not first_block or all(b == 0 for b in first_block):
+                        logger.error("文件内容异常：文件起始部分全为空或零")
+                        
+                        # 如果文件前面是全零，尝试查找非零起始位置
+                        logger.info("尝试检测文件中非零数据的起始位置...")
+                        check_f.seek(0)
+                        position = 0
+                        while True:
+                            block = check_f.read(8192)
+                            if not block:
+                                break
+                                
+                            for i, byte in enumerate(block):
+                                if byte != 0:
+                                    position = position + i
+                                    logger.info(f"在偏移量 {position} 处找到非零数据")
+                                    check_f.seek(position)
+                                    nonzero_block = check_f.read(100)
+                                    hex_content = ' '.join(f'{b:02x}' for b in nonzero_block)
+                                    logger.info(f"非零数据的十六进制表示: {hex_content}")
+                                    
+                                    # 退出所有循环
+                                    break
+                            else:
+                                position += len(block)
+                                continue
+                            break
+                
                 # 计算并显示文件的前1024字节的哈希，用于调试
                 with open(temp_file_path, 'rb') as f:
                     first_bytes = f.read(1024)
@@ -1386,6 +1463,9 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                     # 重新计算哈希并记录，用于调试
                     calculated_hash = temp_file_info.calculate_file_hash(temp_file_path)
                     logger.error(f"计算得到的哈希值: {calculated_hash}")
+                    
+                    # 尝试与发送端沟通，了解实际文件大小和文件头信息
+                    logger.info("文件可能已损坏。请让发送方确认文件头部内容以帮助诊断问题。")
                     task.status = "failed"
                     task.error_message = "文件哈希不匹配"
                     
