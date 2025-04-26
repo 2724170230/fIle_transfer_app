@@ -292,8 +292,8 @@ class SendNowApp(MainWindow):
         """处理发现新设备事件"""
         logger.info(f"发现设备: {device.name} {device.device_id} ({device.ip})")
         
-        # 添加到发送面板的设备列表
-        item_text = f"{device.name} {device.device_id} ({device.ip})"
+        # 添加到发送面板的设备列表，不显示IP地址
+        item_text = f"{device.name} {device.device_id}"
         
         # 检查设备是否已在列表中
         found = False
