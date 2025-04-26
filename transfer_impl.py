@@ -163,17 +163,45 @@ def recv_all(sock: socket.socket, n: int) -> bytes:
         bytes: 接收到的字节数据
         None: 如果连接关闭或出错
     """
+    # 检查参数合法性
+    if n <= 0:
+        logger.error(f"接收字节数必须大于0，当前值: {n}")
+        return None
+        
+    # 限制单次接收的最大字节数
+    max_size = 50 * 1024 * 1024  # 50MB
+    if n > max_size:
+        logger.error(f"请求接收的数据块过大: {n} 字节，超过最大限制 {max_size} 字节")
+        return None
+        
     data = b''
+    start_time = time.time()
+    max_wait_time = 60  # 最大等待时间为60秒
+    
     try:
         while len(data) < n:
-            packet = sock.recv(n - len(data))
+            # 检查是否超时
+            if time.time() - start_time > max_wait_time:
+                logger.warning(f"接收数据超时，已接收 {len(data)}/{n} 字节")
+                return None
+                
+            # 计算剩余需要接收的字节数
+            remaining = n - len(data)
+            # 一次最多接收8KB，防止大数据块
+            packet = sock.recv(min(remaining, 8192))
+            
             if not packet:  # 套接字已关闭
                 logger.warning("套接字已关闭，无法接收更多数据")
                 return None
+                
             data += packet
+            
         return data
     except (socket.error, ConnectionError) as e:
         logger.error(f"接收数据时出错: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"接收数据时发生未知错误: {e}")
         return None
 
 def _transfer_server_loop(self):
@@ -712,7 +740,9 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
         
         # 打开文件并发送数据
         file_size = file_info.file_size
-        chunk_size = file_info.chunk_size
+        # 限制块大小不超过2MB
+        chunk_size = min(file_info.chunk_size, 2 * 1024 * 1024)
+        logger.info(f"文件传输将使用 {chunk_size} 字节的数据块大小")
         bytes_sent = 0
         
         with open(file_info.file_path, 'rb') as f:
@@ -790,13 +820,29 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
                 header_json = json.dumps(header)
                 header_bytes = header_json.encode('utf-8')
                 
+                # 验证头部大小是否合理
+                header_len = len(header_bytes)
+                if header_len > 1024:  # 头部不应该超过1KB
+                    logger.warning(f"头部大小异常 ({header_len} 字节)，尝试简化头部内容")
+                    # 使用简化的头部
+                    header = {
+                        "id": transfer_id,
+                        "off": bytes_sent,
+                        "size": len(chunk)
+                    }
+                    header_json = json.dumps(header)
+                    header_bytes = header_json.encode('utf-8')
+                    header_len = len(header_bytes)
+                
                 try:
                     # 发送头部长度（4字节）
-                    header_len = len(header_bytes)
                     client_sock.sendall(header_len.to_bytes(4, byteorder='big'))
                     
                     # 发送头部
                     client_sock.sendall(header_bytes)
+                    
+                    # 打印调试信息
+                    logger.debug(f"已发送头部: size={len(chunk)}, offset={bytes_sent}")
                     
                     # 发送数据
                     client_sock.sendall(chunk)
@@ -1092,6 +1138,18 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                         
                         # 解析数据块大小
                         chunk_size = struct.unpack("!I", header)[0]
+                        
+                        # 添加数据块大小合理性检查
+                        max_allowed_chunk_size = 10 * 1024 * 1024  # 10MB最大块大小
+                        if chunk_size <= 0 or chunk_size > max_allowed_chunk_size:
+                            logger.error(f"数据块大小异常: {chunk_size} 字节，超出合理范围 (0-{max_allowed_chunk_size}字节)")
+                            if retry_count >= max_retries:
+                                raise ConnectionError(f"数据块大小异常: {chunk_size}")
+                            
+                            retry_count += 1
+                            time.sleep(2)
+                            continue
+                        
                         logger.debug(f"成功接收数据块头部，块大小: {chunk_size} 字节")
                         
                         # 接收数据块
@@ -1130,13 +1188,13 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                                 progress_percent = (bytes_received / expected_size) * 100 if expected_size > 0 else 0
                                 task.update_progress(bytes_received)
                                 last_progress_update = current_time
-                                logger.debug(f"文件传输进度: {progress_percent:.2f}%，已接收: {bytes_received}/{expected_size} 字节")
+                                logger.info(f"文件传输进度: {progress_percent:.2f}%，已接收: {bytes_received}/{expected_size} 字节")
                             
                             # 接收数据块后
                             logger.debug(f"已接收数据块: {len(chunk)} 字节, 总进度: {bytes_received}/{expected_size}")
                         else:
                             logger.warning("收到零大小数据块，跳过")
-                            
+                        
                     except socket.timeout:
                         logger.warning("接收数据超时，尝试等待重新连接")
                         if retry_count >= max_retries:
