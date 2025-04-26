@@ -475,7 +475,7 @@ class SendNowApp(MainWindow):
         self.sendPanel.statusPanel.showCompleted(filename, mode="send")
         
         # 创建一个计时器，在显示完成状态一段时间后自动隐藏
-        QTimer.singleShot(3000, self.sendPanel.statusPanel.reset)
+        QTimer.singleShot(3000, self.sendPanel.statusPanel.hideContent)
         
         # 重置发送按钮
         self.sendPanel.sendButton.setEnabled(True)
@@ -495,7 +495,7 @@ class SendNowApp(MainWindow):
             self.sendPanel.statusPanel.actionsWidget.setVisible(False)
             
             # 创建一个计时器，在显示失败状态一段时间后自动隐藏
-            QTimer.singleShot(3000, self.sendPanel.statusPanel.reset)
+            QTimer.singleShot(3000, self.sendPanel.statusPanel.hideContent)
         
         # 重置发送按钮
         self.sendPanel.sendButton.setEnabled(True)
@@ -581,7 +581,7 @@ class SendNowApp(MainWindow):
             return
         
         # 重置发送状态面板
-        self.sendPanel.statusPanel.reset()
+        self.sendPanel.statusPanel.hideContent()
         
         # 开始发送文件
         logger.info(f"开始发送文件: {file_path} 到 {device_ip}:{device_port}")
