@@ -131,13 +131,10 @@ class FileReceiveDialog(QDialog):
         super().__init__(parent)
         self.file_info = file_info
         self.save_dir = None
+        self.parent = parent
         
-        # 获取默认保存路径
-        if parent and hasattr(parent, 'transfer_server'):
-            self.default_save_dir = parent.transfer_server.save_dir
-        else:
-            # 如果无法从父窗口获取，则从配置获取
-            self.default_save_dir = ConfigManager.get_save_dir()
+        # 获取默认保存路径（将在setup_ui中设置）
+        self.default_save_dir = None
         
         self.setup_ui()
     
@@ -146,6 +143,13 @@ class FileReceiveDialog(QDialog):
         self.setWindowTitle("文件接收请求")
         self.setMinimumWidth(400)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        
+        # 获取最新的默认保存路径
+        if self.parent and hasattr(self.parent, 'transfer_server'):
+            self.default_save_dir = self.parent.transfer_server.save_dir
+        else:
+            # 如果无法从父窗口获取，则从配置获取
+            self.default_save_dir = ConfigManager.get_save_dir()
         
         # 主布局
         layout = QVBoxLayout(self)
@@ -226,10 +230,13 @@ class FileReceiveDialog(QDialog):
     def on_custom_toggled(self, checked):
         """用户切换到自定义保存位置"""
         if checked:
+            # 优先使用当前默认保存路径作为起始目录
+            start_dir = self.default_save_dir if self.default_save_dir else os.path.expanduser("~/Downloads")
+            
             dir_path = QFileDialog.getExistingDirectory(
                 self, 
                 "选择保存位置", 
-                os.path.expanduser("~/Downloads")
+                start_dir
             )
             
             if dir_path:
@@ -415,8 +422,13 @@ class SendNowApp(MainWindow):
         result = dialog.exec_()
         
         if result == QDialog.Accepted:
-            # 用户接受文件传输
-            save_dir = dialog.save_dir if dialog.save_dir else ConfigManager.get_save_dir()
+            # 用户接受文件传输，优先使用用户选择的目录，否则使用最新的默认目录
+            if dialog.save_dir:
+                save_dir = dialog.save_dir
+            else:
+                # 确保使用最新的默认保存路径
+                save_dir = self.transfer_server.save_dir
+                
             client_address = (file_info['sender'], 0)  # 端口为0，因为这里不重要
             
             # 获取客户端传过来的文件信息
@@ -626,7 +638,14 @@ class SendNowApp(MainWindow):
                 
                 # 更新设置面板中的显示
                 self.settingsPanel.savePathEdit.setText(directory)
+                
+                # 确保配置已被保存 - 刷新接收面板相关设置
+                # （如果接收面板中有需要更新的控件，在这里更新）
+                
                 logger.info(f"已更新默认保存路径: {directory}")
+                
+                # 显示成功提示（可选）
+                QMessageBox.information(self, "设置已保存", f"默认保存路径已更新为:\n{directory}")
             else:
                 # 显示错误信息
                 QMessageBox.warning(self, "设置失败", f"无法设置保存目录: {directory}\n请确保该目录可写入。")
