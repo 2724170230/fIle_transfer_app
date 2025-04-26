@@ -59,16 +59,35 @@ class FileInfo:
     
     def _get_mime_type(self) -> str:
         """获取文件的MIME类型"""
-        try:
-            # 优先使用文件扩展名判断
-            _, ext = os.path.splitext(self.file_path)
-            if ext:
-                ext = ext.lower()
-                # 常见文件类型映射
+        if not self.file_path or not os.path.exists(self.file_path):
+            # 基于文件扩展名猜测
+            if self.file_name:
+                ext = os.path.splitext(self.file_name)[1].lower()
                 mime_map = {
                     '.txt': 'text/plain',
                     '.html': 'text/html',
                     '.htm': 'text/html',
+                    '.css': 'text/css',
+                    '.js': 'application/javascript',
+                    '.json': 'application/json',
+                    '.xml': 'application/xml',
+                    '.jpg': 'image/jpeg',
+                    '.jpeg': 'image/jpeg',
+                    '.png': 'image/png',
+                    '.gif': 'image/gif',
+                    '.bmp': 'image/bmp',
+                    '.webp': 'image/webp',
+                    '.svg': 'image/svg+xml',
+                    '.mp3': 'audio/mpeg',
+                    '.wav': 'audio/wav',
+                    '.mp4': 'video/mp4',
+                    '.mkv': 'video/x-matroska',
+                    '.avi': 'video/x-msvideo',
+                    '.mov': 'video/quicktime',
+                    '.wmv': 'video/x-ms-wmv',
+                    '.m4a': 'audio/m4a',
+                    '.aac': 'audio/aac',
+                    '.flac': 'audio/flac',
                     '.pdf': 'application/pdf',
                     '.doc': 'application/msword',
                     '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -76,31 +95,25 @@ class FileInfo:
                     '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                     '.ppt': 'application/vnd.ms-powerpoint',
                     '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-                    '.jpg': 'image/jpeg',
-                    '.jpeg': 'image/jpeg',
-                    '.png': 'image/png',
-                    '.gif': 'image/gif',
-                    '.mp3': 'audio/mpeg',
-                    '.mp4': 'video/mp4',
                     '.zip': 'application/zip',
                     '.rar': 'application/x-rar-compressed',
+                    '.7z': 'application/x-7z-compressed',
                     '.tar': 'application/x-tar',
                     '.gz': 'application/gzip',
+                    '.exe': 'application/x-msdownload',
+                    '.apk': 'application/vnd.android.package-archive',
+                    '.dmg': 'application/x-apple-diskimage',
+                    '.iso': 'application/x-iso9660-image',
+                    '.bin': 'application/octet-stream'
                 }
-                if ext in mime_map:
-                    return mime_map[ext]
-            
-            # 如果文件存在，可以通过读取文件头来判断
-            if os.path.exists(self.file_path):
-                import mimetypes
-                mime_type, _ = mimetypes.guess_type(self.file_path)
-                if mime_type:
-                    return mime_type
-            
-            # 默认二进制流
+                return mime_map.get(ext, 'application/octet-stream')
             return 'application/octet-stream'
-        except Exception as e:
-            logger.warning(f"获取MIME类型失败: {e}")
+        
+        try:
+            import mimetypes
+            mime_type, _ = mimetypes.guess_type(self.file_path)
+            return mime_type or 'application/octet-stream'
+        except:
             return 'application/octet-stream'
     
     def compute_hash(self) -> str:

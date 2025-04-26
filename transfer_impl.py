@@ -983,8 +983,35 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         
         # 获取断点续传位置（如果有）
         resume_offset = getattr(task.file_info, "resume_offset", 0)
-        bytes_received = resume_offset
         
+        # 检查是否存在断点续传信息文件
+        resume_info_path = f"{temp_file_path}.resume"
+        if os.path.exists(resume_info_path) and (resume_offset == 0):
+            try:
+                import json
+                with open(resume_info_path, 'r') as f:
+                    resume_info = json.load(f)
+                
+                # 验证断点续传信息
+                if (resume_info.get("file_name") == task.file_info.file_name and 
+                    resume_info.get("file_size") == task.file_info.file_size and 
+                    resume_info.get("file_hash") == task.file_info.file_hash):
+                    
+                    # 验证临时文件大小
+                    if os.path.exists(temp_file_path):
+                        temp_size = os.path.getsize(temp_file_path)
+                        if temp_size == resume_info.get("received_size"):
+                            resume_offset = temp_size
+                            logger.info(f"发现有效的断点续传信息，从偏移量 {resume_offset} 继续接收")
+                            task.file_info.resume_offset = resume_offset
+                        else:
+                            logger.warning(f"临时文件大小 ({temp_size}) 与断点续传信息 ({resume_info.get('received_size')}) 不匹配")
+                else:
+                    logger.warning("断点续传信息与当前任务不匹配")
+            except Exception as e:
+                logger.error(f"读取断点续传信息失败: {e}")
+        
+        bytes_received = resume_offset
         expected_size = task.file_info.file_size
         last_progress_update = time.time()
         progress_update_interval = 0.5  # 更新间隔，秒
@@ -1096,9 +1123,11 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                             # 更新进度
                             current_time = time.time()
                             if current_time - last_progress_update >= progress_update_interval:
+                                # 替换对task.progress的直接引用，改用计算的百分比
+                                progress_percent = (bytes_received / expected_size) * 100 if expected_size > 0 else 0
                                 task.update_progress(bytes_received)
                                 last_progress_update = current_time
-                                logger.debug(f"文件传输进度: {task.progress:.2f}%，已接收: {bytes_received}/{expected_size} 字节")
+                                logger.debug(f"文件传输进度: {progress_percent:.2f}%，已接收: {bytes_received}/{expected_size} 字节")
                         else:
                             logger.warning("收到零大小数据块，跳过")
                             
@@ -1151,7 +1180,7 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                 # 尝试继续处理
         else:
             logger.error(f"临时文件不存在: {temp_file_path}")
-            raise FileNotFoundError(f"临时文件不存在: {temp_file_path}")
+            raise FileNotFoundError(f"临时文件丢失: {temp_file_path}")
         
         # 验证文件哈希(如果有)
         if task.file_info.file_hash:
@@ -1171,69 +1200,43 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                 logger.error(f"计算文件哈希值出错: {e}")
                 # 继续处理，不因哈希计算失败而中断
         
-        # 将临时文件重命名为最终文件名
+        # 将临时文件重命名为最终文件
         try:
-            logger.info(f"准备将临时文件重命名为最终文件: {temp_file_path} -> {save_path}")
-            # 确保目标文件不存在
+            # 如果目标文件已存在，先删除
             if os.path.exists(save_path):
-                try:
-                    logger.info(f"目标文件已存在，尝试删除: {save_path}")
-                    os.remove(save_path)
-                    logger.info(f"已删除现有的目标文件: {save_path}")
-                except Exception as e:
-                    logger.error(f"删除现有文件失败: {e}")
-                    # 尝试使用另一个文件名
-                    base_name, extension = os.path.splitext(save_path)
-                    new_path = f"{base_name}_{int(time.time())}{extension}"
-                    logger.info(f"将使用新的文件名: {save_path} -> {new_path}")
-                    save_path = new_path
-                    task.file_info.save_path = save_path
+                logger.info(f"目标文件已存在，正在删除: {save_path}")
+                os.remove(save_path)
             
-            # 重命名文件
-            logger.info(f"执行重命名操作: {temp_file_path} -> {save_path}")
+            logger.info(f"将临时文件重命名为最终文件: {temp_file_path} -> {save_path}")
             os.rename(temp_file_path, save_path)
-            logger.info(f"重命名成功: {temp_file_path} -> {save_path}")
+            logger.info(f"文件保存成功: {save_path}")
             
-            # 验证文件是否确实存在
+            # 验证最终文件是否存在及大小是否正确
             if os.path.exists(save_path):
-                logger.info(f"最终文件验证: 文件存在: {save_path}")
                 final_size = os.path.getsize(save_path)
-                logger.info(f"最终文件大小: {final_size} 字节")
+                logger.info(f"最终文件验证: 大小 {final_size} 字节")
                 if final_size != expected_size:
                     logger.error(f"最终文件大小不匹配: 预期 {expected_size}，实际 {final_size}")
-                    # 继续处理，不因大小不匹配而失败
-                else:
-                    logger.info(f"最终文件大小正确: {final_size} 字节")
             else:
-                logger.error(f"重命名后的文件不存在: {save_path}")
-                raise FileNotFoundError(f"重命名后的文件不存在: {save_path}")
-            
-            # 执行 ls 命令查看文件是否在文件系统中可见
-            try:
-                logger.info(f"执行系统命令验证文件: ls -la {save_path}")
-                result = subprocess.run(['ls', '-la', save_path], 
-                                       capture_output=True, text=True)
-                if result.returncode == 0:
-                    logger.info(f"系统命令验证结果: 文件存在\n{result.stdout.strip()}")
-                else:
-                    logger.error(f"系统命令验证失败: {result.stderr.strip()}")
-            except Exception as e:
-                logger.error(f"执行系统命令验证时出错: {e}")
+                logger.error(f"最终文件不存在: {save_path}")
+                raise FileNotFoundError(f"无法找到最终文件: {save_path}")
         except Exception as e:
-            logger.error(f"重命名文件失败: {e}")
-            task.status = "failed"
-            task.error_message = f"重命名文件失败: {str(e)}"
-            return
-        
-        # 更新任务状态为已完成
-        task.status = "completed"
-        task.file_info.status = "completed"
-        # 确保进度显示为100%
-        task.update_progress(expected_size)
-        logger.info(f"文件接收任务完成: {task.transfer_id}")
-        logger.info(f"文件: {task.file_info.file_name}")
-        logger.info(f"保存在: {save_path}")
-        logger.info(f"大小: {os.path.getsize(save_path) if os.path.exists(save_path) else 'unknown'} 字节")
+            logger.error(f"重命名临时文件失败: {e}")
+            
+            # 尝试用复制方式替代重命名
+            try:
+                import shutil
+                logger.info(f"尝试通过复制方式创建最终文件: {temp_file_path} -> {save_path}")
+                shutil.copy2(temp_file_path, save_path)
+                logger.info(f"文件复制成功: {save_path}")
+                
+                # 删除临时文件
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+                    logger.info(f"临时文件已删除: {temp_file_path}")
+            except Exception as copy_error:
+                logger.error(f"复制文件失败: {copy_error}")
+                raise
         
         # 发送完成确认消息
         try:
@@ -1243,43 +1246,15 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
             logger.warning(f"发送完成确认消息失败: {e}")
             # 继续执行，不影响本地文件保存
         
-        # 确保文件成功保存 - 额外验证步骤
+        # 最终验证 - 再次确认文件存在
         if os.path.exists(save_path):
-            file_size = os.path.getsize(save_path)
-            logger.info(f"最终验证: 文件存在于 {save_path}, 大小: {file_size} 字节")
-            
-            # 如果文件大小不正确，尝试从内存中恢复
-            if file_size != expected_size and len(received_data) == expected_size:
-                logger.warning(f"文件大小不匹配，尝试从内存重新保存")
-                
-                # 备份路径
-                backup_path = f"{save_path}.backup"
-                
-                try:
-                    # 重新保存文件
-                    with open(backup_path, 'wb') as f:
-                        f.write(received_data)
-                        f.flush()
-                        os.fsync(f.fileno())
-                    
-                    logger.info(f"已创建备份文件: {backup_path}, 大小: {len(received_data)} 字节")
-                    
-                    # 复制到原始位置
-                    try:
-                        os.remove(save_path)
-                    except:
-                        pass
-                    
-                    # 将备份文件重命名为最终文件
-                    os.rename(backup_path, save_path)
-                    logger.info(f"已从备份恢复文件: {save_path}")
-                except Exception as e:
-                    logger.error(f"从内存保存文件失败: {e}")
+            final_size = os.path.getsize(save_path)
+            logger.info(f"最终文件验证: {save_path}, 大小: {final_size} 字节")
         else:
-            logger.error(f"最终验证失败: 文件不存在于 {save_path}")
+            logger.error(f"最终文件不存在: {save_path}")
             
             # 如果文件不存在但我们有完整数据，尝试保存
-            if len(received_data) == expected_size:
+            if received_data and len(received_data) == expected_size:
                 logger.info(f"尝试从内存中恢复文件")
                 
                 try:
@@ -1293,16 +1268,35 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                         f.flush()
                         os.fsync(f.fileno())
                     
-                    logger.info(f"已成功将文件保存到备份位置: {backup_path}")
+                    logger.info(f"已创建备份文件: {backup_path}, 大小: {len(received_data)} 字节")
                     
-                    # 尝试复制到原始位置
-                    import shutil
-                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-                    shutil.copy2(backup_path, save_path)
-                    logger.info(f"已将备份复制到预期位置: {save_path}")
+                    # 再次尝试保存到原路径
+                    try:
+                        shutil.copy2(backup_path, save_path)
+                        logger.info(f"已将备份复制到最终位置: {save_path}")
+                    except Exception as e:
+                        logger.error(f"无法复制备份到最终位置: {e}")
                 except Exception as e:
-                    logger.error(f"恢复保存文件失败: {e}")
-                    logger.error(traceback.format_exc())
+                    logger.error(f"从内存保存文件失败: {e}")
+        
+        # 更新任务状态为完成
+        task.status = "completed"
+        task.file_info.status = "completed"
+        task.end_time = time.time()
+        logger.info(f"文件接收任务完成: {task.file_info.file_name}")
+        
+        # 放置在日志中醒目的位置
+        logger.info("="*50)
+        logger.info(f"文件已保存到: {save_path}")
+        logger.info("="*50)
+        
+        # 关闭连接
+        if client_sock:
+            try:
+                client_sock.close()
+                logger.info("客户端连接已关闭")
+            except Exception as e:
+                logger.warning(f"关闭客户端连接时出错: {e}")
         
     except ConnectionError as e:
         logger.error(f"连接错误: {e}")
@@ -1327,14 +1321,39 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         except Exception as e:
             logger.debug(f"关闭套接字时出错: {e}")
         
-        # 如果任务失败且临时文件仍存在，删除它
+        # 如果任务失败且临时文件仍存在，保留它用于断点续传
         if (task.status == "failed" and temp_file_path and 
                 os.path.exists(temp_file_path)):
             try:
-                os.remove(temp_file_path)
-                logger.info(f"已删除不完整的临时文件: {temp_file_path}")
+                # 获取当前临时文件的大小
+                temp_size = os.path.getsize(temp_file_path)
+                if temp_size > 0:
+                    logger.info(f"保留不完整的临时文件用于断点续传: {temp_file_path}, 已接收: {temp_size} 字节")
+                    
+                    # 保存断点续传信息
+                    resume_info_path = f"{temp_file_path}.resume"
+                    with open(resume_info_path, 'w') as f:
+                        import json
+                        json.dump({
+                            "file_name": task.file_info.file_name,
+                            "file_size": task.file_info.file_size,
+                            "file_hash": task.file_info.file_hash,
+                            "received_size": temp_size,
+                            "transfer_id": task.transfer_id,
+                            "timestamp": time.time()
+                        }, f)
+                    logger.info(f"已保存断点续传信息: {resume_info_path}")
+                else:
+                    # 如果文件大小为0，删除它
+                    os.remove(temp_file_path)
+                    logger.info(f"已删除空的临时文件: {temp_file_path}")
             except Exception as e:
-                logger.error(f"删除临时文件失败: {e}")
+                logger.error(f"处理不完整临时文件时出错: {e}")
+                try:
+                    # 出错时保险起见不删除临时文件
+                    logger.info(f"保留不完整的临时文件: {temp_file_path}")
+                except:
+                    pass
         
         # 从接收线程列表中移除
         if task.transfer_id in self.receiver_threads:
