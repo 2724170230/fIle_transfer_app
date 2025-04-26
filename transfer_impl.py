@@ -1926,4 +1926,9 @@ setattr(TransferManager, "_receive_file", _receive_file)
 setattr(TransferManager, "_on_file_progress", _on_file_progress)
 setattr(TransferManager, "_on_file_complete", _on_file_complete)
 setattr(TransferManager, "_on_file_error", _on_file_error)
-setattr(TransferManager, "_send_transfer_complete", _send_transfer_complete) 
+setattr(TransferManager, "_send_transfer_complete", _send_transfer_complete)
+
+# 添加新增的诊断方法注册
+setattr(TransferManager, "_request_file_header_verification", _request_file_header_verification)
+setattr(TransferManager, "_handle_file_header_verify_request", _handle_file_header_verify_request)
+setattr(TransferManager, "_handle_file_header_verify_response", _handle_file_header_verify_response) 
