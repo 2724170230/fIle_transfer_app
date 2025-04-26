@@ -553,34 +553,78 @@ class StatusPanel(QWidget):
             }}
         """)
         
+        # 传输完成操作按钮（初始隐藏）
+        self.actionsWidget = QWidget()
+        actionsLayout = QHBoxLayout(self.actionsWidget)
+        
+        self.openFolderButton = QPushButton("打开所在文件夹")
+        self.openFileButton = QPushButton("打开文件")
+        
+        for btn in [self.openFolderButton, self.openFileButton]:
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {BUTTON_BG};
+                    color: {TEXT_COLOR};
+                    border: none;
+                    padding: 8px 15px;
+                    border-radius: 4px;
+                }}
+                QPushButton:hover {{
+                    background-color: {BUTTON_HOVER};
+                }}
+                QPushButton:pressed {{
+                    background-color: {QColor(BUTTON_BG).darker(110).name()};
+                }}
+            """)
+            actionsLayout.addWidget(btn)
+        
+        self.actionsWidget.setVisible(False)
+        
         # 添加到主布局
         layout.addStretch()
         layout.addWidget(self.statusLabel)
         layout.addWidget(self.progressBar)
+        layout.addWidget(self.actionsWidget)
         layout.addStretch()
         
         # 初始隐藏状态文本和进度条
         self.statusLabel.setVisible(False)
         self.progressBar.setVisible(False)
     
-    def showProgress(self, file_name=None):
-        """显示进度条和状态"""
+    def showProgress(self, file_name=None, mode="receive"):
+        """显示进度条和状态
+        
+        参数:
+            file_name: 文件名
+            mode: 模式，可选值为 "receive"(接收) 或 "send"(发送)
+        """
         self.statusLabel.setVisible(True)
         self.progressBar.setVisible(True)
+        self.actionsWidget.setVisible(False)
+        self.setVisible(True)
         
         if file_name:
-            self.statusLabel.setText(f"正在接收文件：{file_name}")
+            if mode == "send":
+                self.statusLabel.setText(f"正在发送文件：{file_name}")
+            else:
+                self.statusLabel.setText(f"正在接收文件：{file_name}")
     
-    def showCompleted(self, file_name):
+    def showCompleted(self, file_name, mode="receive"):
         """显示传输完成状态"""
-        self.statusLabel.setText(f"已接收：{file_name}")
+        if mode == "send":
+            self.statusLabel.setText(f"已发送：{file_name}")
+        else:
+            self.statusLabel.setText(f"已接收：{file_name}")
         self.progressBar.setValue(100)
+        self.actionsWidget.setVisible(mode == "receive")  # 只在接收模式下显示操作按钮
     
     def reset(self):
         """重置状态面板"""
         self.statusLabel.setVisible(False)
         self.progressBar.setVisible(False)
+        self.actionsWidget.setVisible(False)
         self.progressBar.setValue(0)
+        self.setVisible(False)
 
 class DeviceSearchWidget(QWidget):
     """搜索附近设备的组件"""
@@ -978,11 +1022,9 @@ class SendPanel(QWidget):
             box-shadow: 0px 2px 8px rgba(0, 0, 0, 0.15);
         """)
         
-        # ===== 中间区域：状态面板 =====
-        # 添加状态面板用于显示发送进度
+        # ===== 发送状态面板 =====
         self.statusPanel = StatusPanel()
-        # 初始时隐藏状态面板中的元素
-        self.statusPanel.reset()
+        self.statusPanel.setVisible(False)  # 初始隐藏状态面板
         
         # ===== 底部区域：附近设备 =====
         
@@ -1096,10 +1138,13 @@ class SendPanel(QWidget):
             box-shadow: 0px 2px 8px rgba(0, 0, 0, 0.15);
         """)
         
-        # 将所有区域添加到主布局
+        # 添加到主布局
         layout.addWidget(topAreaWidget)
-        layout.addWidget(self.statusPanel)  # 添加状态面板到主布局
+        layout.addSpacing(10)
+        layout.addWidget(self.statusPanel)  # 添加状态面板
+        layout.addSpacing(10)
         layout.addWidget(self.deviceSearchWidget)
+        layout.addSpacing(10)
         layout.addWidget(self.sendButton, 0, Qt.AlignCenter)
         
         # 配置拖放功能
