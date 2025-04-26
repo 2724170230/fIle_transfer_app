@@ -415,6 +415,9 @@ class SendNowApp(MainWindow):
         
         # 更新接收面板进度条
         self.receivePanel.statusPanel.progressBar.setValue(percent)
+        
+        # 更新传输速度显示
+        self.receivePanel.statusPanel.updateTransferSpeed(current, total)
     
     def on_server_transfer_complete(self, filename, path):
         """处理服务器传输完成事件"""
@@ -484,6 +487,9 @@ class SendNowApp(MainWindow):
         
         # 更新发送进度条
         self.sendPanel.statusPanel.progressBar.setValue(percent)
+        
+        # 更新传输速度显示
+        self.sendPanel.statusPanel.updateTransferSpeed(current, total)
     
     def on_client_transfer_complete(self, filename, response):
         """处理客户端传输完成事件"""

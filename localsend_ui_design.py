@@ -3,6 +3,7 @@ import random
 import hashlib
 import os
 import math  # 添加math模块导入
+import time  # 添加time模块导入用于计算传输速度
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, 
                              QProgressBar, QListWidget, QListWidgetItem, QStackedWidget, 
@@ -548,6 +549,12 @@ class StatusPanel(QWidget):
         self.statusLabel.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 18px;")
         self.statusLabel.setAlignment(Qt.AlignCenter)
         
+        # 传输速度标签
+        self.speedLabel = QLabel("")
+        self.speedLabel.setStyleSheet(f"color: {SECONDARY_TEXT_COLOR}; font-size: 14px;")
+        self.speedLabel.setAlignment(Qt.AlignCenter)
+        self.speedLabel.setVisible(False)  # 初始隐藏
+        
         # 进度条
         self.progressBar = QProgressBar()
         self.progressBar.setRange(0, 100)
@@ -625,6 +632,7 @@ class StatusPanel(QWidget):
         # 添加到主布局
         layout.addStretch()
         layout.addWidget(self.statusLabel)
+        layout.addWidget(self.speedLabel)  # 添加速度标签
         layout.addWidget(self.progressBar)
         layout.addWidget(self.actionsWidget)
         layout.addWidget(self.completeButtonWidget)
@@ -641,6 +649,10 @@ class StatusPanel(QWidget):
         self.fadeAnimation.setEndValue(0.0)
         self.fadeAnimation.setEasingCurve(QEasingCurve.OutQuad)
         self.fadeAnimation.finished.connect(self.onFadeOutFinished)
+        
+        # 传输速度计算相关变量
+        self.last_update_time = 0
+        self.last_bytes = 0
     
     def showProgress(self, file_name=None, mode="receive"):
         """显示进度条和状态
@@ -653,16 +665,66 @@ class StatusPanel(QWidget):
         self.setWindowOpacity(1.0)
         
         self.statusLabel.setVisible(True)
+        self.speedLabel.setVisible(True)  # 显示速度标签
         self.progressBar.setVisible(True)
         self.actionsWidget.setVisible(False)
         self.completeButtonWidget.setVisible(False)
         self.setVisible(True)
+        
+        # 重置传输速度计算相关变量
+        self.last_update_time = time.time()
+        self.last_bytes = 0
+        self.speedLabel.setText("计算中...")
         
         if file_name:
             if mode == "send":
                 self.statusLabel.setText(f"正在发送文件：{file_name}")
             else:
                 self.statusLabel.setText(f"正在接收文件：{file_name}")
+    
+    def updateTransferSpeed(self, current_bytes, total_bytes):
+        """更新传输速度显示
+        
+        参数:
+            current_bytes: 当前已传输的字节数
+            total_bytes: 总字节数
+        """
+        current_time = time.time()
+        time_diff = current_time - self.last_update_time
+        
+        # 至少等待0.5秒更新一次速度，避免频繁更新
+        if time_diff > 0.5 and self.last_update_time > 0:
+            bytes_diff = current_bytes - self.last_bytes
+            speed = bytes_diff / time_diff  # 字节/秒
+            
+            # 格式化速度显示
+            if speed < 1024:
+                speed_str = f"{speed:.1f} B/s"
+            elif speed < 1024 * 1024:
+                speed_str = f"{speed/1024:.1f} KB/s"
+            else:
+                speed_str = f"{speed/(1024*1024):.1f} MB/s"
+            
+            # 计算剩余时间
+            remaining_bytes = total_bytes - current_bytes
+            if speed > 0:
+                remaining_seconds = remaining_bytes / speed
+                
+                # 格式化剩余时间
+                if remaining_seconds < 60:
+                    time_str = f"{int(remaining_seconds)}秒"
+                elif remaining_seconds < 3600:
+                    time_str = f"{int(remaining_seconds/60)}分{int(remaining_seconds%60)}秒"
+                else:
+                    time_str = f"{int(remaining_seconds/3600)}时{int((remaining_seconds%3600)/60)}分"
+                
+                self.speedLabel.setText(f"速度: {speed_str} | 剩余时间: {time_str}")
+            else:
+                self.speedLabel.setText(f"速度: {speed_str}")
+            
+            # 更新计算基准值
+            self.last_update_time = current_time
+            self.last_bytes = current_bytes
     
     def showCompleted(self, file_name, mode="receive"):
         """显示传输完成状态"""
@@ -671,6 +733,7 @@ class StatusPanel(QWidget):
         else:
             self.statusLabel.setText(f"已接收：{file_name}")
         self.progressBar.setValue(100)
+        self.speedLabel.setText("传输完成")  # 更新速度标签
         self.actionsWidget.setVisible(mode == "receive")  # 只在接收模式下显示操作按钮
         
         # 在接收模式下显示完成按钮
@@ -690,11 +753,16 @@ class StatusPanel(QWidget):
     def reset(self):
         """重置状态面板"""
         self.statusLabel.setVisible(False)
+        self.speedLabel.setVisible(False)  # 隐藏速度标签
         self.progressBar.setVisible(False)
         self.actionsWidget.setVisible(False)
         self.completeButtonWidget.setVisible(False)
         self.progressBar.setValue(0)
         self.setVisible(False)
+        
+        # 重置传输速度计算相关变量
+        self.last_update_time = 0
+        self.last_bytes = 0
 
 class DeviceSearchWidget(QWidget):
     """搜索附近设备的组件"""
