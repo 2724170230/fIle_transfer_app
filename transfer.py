@@ -247,31 +247,22 @@ class TransferTask:
         self.save_path = save_path
         self.error_message = None
         
-        # 添加用于计算实时速度的滑动窗口
-        self.speed_window_size = 5  # 保留最近5个时间点
-        self.speed_window = []  # 格式: [(timestamp, bytes), ...]
-        self.current_speed = 0.0  # 当前计算出的速度
-        
     def update_progress(self, bytes_transferred: int):
         """更新传输进度"""
         old_bytes = self.bytes_transferred
         self.bytes_transferred = bytes_transferred
         current_time = time.time()
-        
-        # 更新滑动窗口用于速度计算
-        self.speed_window.append((current_time, bytes_transferred))
-        
-        # 保持窗口大小
-        if len(self.speed_window) > self.speed_window_size:
-            self.speed_window.pop(0)
-            
-        # 计算最近一段时间的速度
-        self._calculate_speed()
-        
         self.last_update_time = current_time
         
         # 计算进度百分比
         progress = self.get_progress()
+        
+        # 计算传输速度 (bytes/s)
+        speed = 0.0
+        if self.start_time:
+            elapsed = current_time - self.start_time
+            if elapsed > 0:
+                speed = bytes_transferred / elapsed
         
         # 如果是接收方，且progress有变化，记录日志
         if not self.is_sender and (bytes_transferred - old_bytes > 8192 or progress >= 1.0):
@@ -280,46 +271,13 @@ class TransferTask:
         # 调用文件传输管理器的进度回调
         if hasattr(self, 'manager') and self.manager:
             if hasattr(self.manager, '_on_file_progress'):
-                self.manager._on_file_progress(self.file_info, progress, self.current_speed)
-                logger.debug(f"调用manager._on_file_progress回调: {progress*100:.1f}%, {self.current_speed:.1f}B/s")
+                self.manager._on_file_progress(self.file_info, progress, speed)
+                logger.debug(f"调用manager._on_file_progress回调: {progress*100:.1f}%, {speed:.1f}B/s")
             
             # 调用_on_progress_update回调(如果存在)
             if hasattr(self.manager, 'on_progress_update') and self.manager.on_progress_update:
-                self.manager.on_progress_update(self.file_info, progress, self.current_speed)
-                logger.debug(f"调用manager.on_progress_update回调: {progress*100:.1f}%, {self.current_speed:.1f}B/s")
-    
-    def _calculate_speed(self):
-        """计算当前传输速度，使用滑动窗口"""
-        if len(self.speed_window) < 2:
-            self.current_speed = 0.0
-            return
-            
-        # 获取窗口中的第一个和最后一个数据点
-        first_time, first_bytes = self.speed_window[0]
-        last_time, last_bytes = self.speed_window[-1]
-        
-        # 计算时间差和字节差
-        time_diff = last_time - first_time
-        bytes_diff = last_bytes - first_bytes
-        
-        # 如果时间差太小，可能导致计算不准确
-        if time_diff < 0.1:
-            # 如果只有很小的时间差，尝试使用更长的窗口，如果可用
-            if self.start_time and time_diff < 0.5:
-                # 使用总体时间作为备选
-                total_time = last_time - self.start_time
-                if total_time > 0:
-                    average_speed = last_bytes / total_time
-                    self.current_speed = average_speed
-                    return
-            # 保持当前速度不变
-            return
-            
-        # 计算速度 (bytes/second)
-        speed = bytes_diff / time_diff
-        
-        # 更新当前速度
-        self.current_speed = max(0, speed)  # 确保速度非负
+                self.manager.on_progress_update(self.file_info, progress, speed)
+                logger.debug(f"调用manager.on_progress_update回调: {progress*100:.1f}%, {speed:.1f}B/s")
         
     def get_progress(self) -> float:
         """获取传输进度百分比"""
@@ -329,8 +287,14 @@ class TransferTask:
         
     def get_speed(self) -> float:
         """获取传输速度 (bytes/s)"""
-        # 使用滑动窗口计算出的速度
-        return self.current_speed
+        if not self.start_time:
+            return 0.0
+            
+        elapsed = time.time() - self.start_time
+        if elapsed <= 0:
+            return 0.0
+            
+        return self.bytes_transferred / elapsed
         
     def get_formatted_speed(self) -> str:
         """获取格式化的传输速度"""

@@ -120,13 +120,13 @@ def list_directory(directory):
     except Exception as e:
         return f"列出目录 {directory} 失败: {e}"
 
-def compute_file_hash(file_obj, algorithm='md5', chunk_size=8192):
+def compute_file_hash(file_obj, algorithm='sha256', chunk_size=8192):
     """
     计算文件的哈希值
     
     Args:
         file_obj: 已打开的文件对象
-        algorithm: 哈希算法，默认md5
+        algorithm: 哈希算法，默认sha256
         chunk_size: 读取文件的块大小
         
     Returns:
@@ -713,6 +713,22 @@ def _handle_network_message(self, message: Message, addr: Tuple[str, int]):
     # 这里主要处理通过UDP广播收到的控制消息
     if message.msg_type in [MessageType.PAUSE, MessageType.RESUME, MessageType.CANCEL]:
         self._handle_transfer_control(message)
+    elif message.msg_type == MessageType.ERROR:
+        # 检查是否是文件头部验证请求
+        if message.payload.get("action") == "file_header_verify":
+            self._handle_file_header_verify_request(message, addr)
+        # 检查是否是文件头部验证响应
+        elif message.payload.get("action") == "file_header_verify_response":
+            self._handle_file_header_verify_response(message, addr)
+        else:
+            # 其他类型的错误消息处理
+            logger.warning(f"收到错误消息: {message.payload}")
+    elif message.msg_type == MessageType.FILE_HEADER_VERIFY:
+        # 处理文件头部验证请求
+        self._handle_file_header_verify_request(message, addr)
+    elif message.msg_type == MessageType.FILE_HEADER_RESPONSE:
+        # 处理文件头部验证响应
+        self._handle_file_header_verify_response(message, addr)
 
 def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
     """发送文件实现"""
@@ -734,9 +750,33 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
         task.status = "transferring"
         file_info.status = "transferring"
         
-        # 计算文件哈希值（如果尚未计算）
+        # 计算文件哈希值（如果尚未计算），确保使用SHA-256算法
         if not file_info.file_hash:
-            file_info.calculate_hash()
+            logger.info("计算文件哈希值，使用FileInfo.compute_hash方法 (SHA-256)")
+            
+            # 添加调试信息
+            logger.info(f"====== 发送文件详细信息 ======")
+            logger.info(f"文件路径: {file_info.file_path}")
+            logger.info(f"文件大小: {os.path.getsize(file_info.file_path)} 字节")
+            
+            # 计算并显示文件的前1024字节的哈希，用于调试
+            with open(file_info.file_path, 'rb') as f:
+                first_bytes = f.read(1024)
+                import hashlib
+                first_bytes_hash = hashlib.sha256(first_bytes).hexdigest()
+                logger.info(f"发送文件起始部分(1KB)的SHA-256哈希: {first_bytes_hash}")
+                # 文件内容的十六进制表示(前100字节)
+                hex_content = ' '.join(f'{b:02x}' for b in first_bytes[:100])
+                logger.info(f"发送文件起始部分的十六进制表示: {hex_content}")
+            
+            # 使用FileInfo的compute_hash方法，它会使用SHA-256
+            hash_value = file_info.compute_hash()
+            logger.info(f"文件哈希值计算完成: {hash_value}")
+            
+            # 确认哈希值已正确设置
+            if not file_info.file_hash or file_info.file_hash != hash_value:
+                logger.warning(f"手动设置文件哈希值: {hash_value}")
+                file_info.file_hash = hash_value
         
         # 打开文件并发送数据
         file_size = file_info.file_size
@@ -806,6 +846,9 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
                 # 定位到文件的当前发送位置
                 f.seek(bytes_sent)
                 
+                # 保留发送前的偏移量，确保使用准确的位置
+                current_offset = bytes_sent
+                
                 # 计算本次发送的大小
                 size_to_send = min(chunk_size, file_size - bytes_sent)
                 
@@ -820,20 +863,20 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
                     transfer_id_bytes = transfer_id.encode('utf-8')
                     transfer_id_len = min(len(transfer_id_bytes), 255)  # 限制ID长度不超过255
                     
-                    # 构建头部
+                    # 构建头部，使用保存的准确偏移量
                     header = struct.pack(
                         '!4sIQB', 
-                        BLOCK_MAGIC,                # 魔数：4字节
-                        len(chunk),                # 数据块大小：4字节无符号整数
-                        bytes_sent,                # 偏移量：8字节无符号整数
-                        transfer_id_len            # 传输ID长度：1字节
+                        BLOCK_MAGIC,          # 魔数：4字节
+                        len(chunk),           # 数据块大小：4字节无符号整数
+                        current_offset,       # 偏移量：8字节无符号整数
+                        transfer_id_len       # 传输ID长度：1字节
                     ) + transfer_id_bytes[:transfer_id_len]  # 传输ID：变长，最多255字节
                     
                     # 发送数据块头部
                     client_sock.sendall(header)
                     
                     # 打印调试信息
-                    logger.debug(f"已发送数据块头部: size={len(chunk)}, offset={bytes_sent}, ID长度={transfer_id_len}")
+                    logger.debug(f"已发送数据块头部: size={len(chunk)}, offset={current_offset}, ID长度={transfer_id_len}")
                     
                     # 发送数据
                     client_sock.sendall(chunk)
@@ -1077,13 +1120,49 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         # 打开文件进行写入
         try:
             logger.info(f"尝试打开临时文件进行写入: {temp_file_path}")
+            
+            # 检查是否需要重新开始接收
+            if file_mode == 'wb' and bytes_received > 0:
+                # 出现逻辑不一致，重置接收位置
+                logger.warning(f"文件模式为wb但bytes_received={bytes_received}，重置为0")
+                bytes_received = 0
+                task.file_info.resume_offset = 0
+            
+            # 如果临时文件已存在但内容可能有问题，备份并重新开始
+            if os.path.exists(temp_file_path) and file_mode == 'wb':
+                backup_path = f"{temp_file_path}.bak.{int(time.time())}"
+                logger.info(f"创建临时文件备份: {backup_path}")
+                try:
+                    import shutil
+                    shutil.copy2(temp_file_path, backup_path)
+                except Exception as e:
+                    logger.error(f"备份临时文件失败: {e}")
+            
             with open(temp_file_path, file_mode) as f:
                 logger.info(f"成功打开临时文件: {temp_file_path}")
                 
                 # 如果是追加模式，确保文件指针在正确位置
                 if file_mode == 'ab':
                     f.seek(0, 2)  # 移动到文件末尾
-                    logger.info(f"文件指针已移动到末尾(追加模式)")
+                    current_pos = f.tell()
+                    logger.info(f"文件指针已移动到末尾(追加模式)，当前位置: {current_pos}")
+                    
+                    # 检查实际文件大小与断点位置是否一致
+                    if current_pos != bytes_received:
+                        logger.warning(f"文件当前位置 ({current_pos}) 与断点续传位置 ({bytes_received}) 不一致")
+                        if current_pos > bytes_received:
+                            logger.warning(f"文件比断点续传位置大，将截断到正确位置")
+                            f.truncate(bytes_received)
+                        else:
+                            logger.warning(f"文件比断点续传位置小，可能丢失数据")
+                            # 更新接收位置以匹配实际文件大小
+                            bytes_received = current_pos
+                
+                # 检查实际文件大小
+                f.flush()
+                os.fsync(f.fileno())
+                actual_size = os.path.getsize(temp_file_path)
+                logger.info(f"文件初始大小: {actual_size} 字节")
                 
                 # 接收数据块直到文件接收完成
                 while bytes_received < expected_size:
@@ -1177,8 +1256,117 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                         # 验证偏移量（应该等于已接收的字节数）
                         if offset != bytes_received:
                             logger.warning(f"数据块偏移量不匹配: 预期 {bytes_received}，收到 {offset}")
-                            # 我们仍然继续接收，但记录这个问题
                             
+                            # 检查是否是更新的数据块（偏移量大于当前接收位置）
+                            if offset > bytes_received:
+                                # 当前位置和数据块偏移量之间有空白，记录警告但不填充零
+                                gap_size = offset - bytes_received
+                                
+                                # 特殊情况：如果是第一个数据块且offset是常见的块大小的倍数，可能是发送方使用了固定块大小跳过了开始部分
+                                if bytes_received == 0 and (offset % 32768 == 0 or offset % 65536 == 0):
+                                    logger.warning(f"第一个数据块偏移量为 {offset}，可能是发送方使用了固定块大小跳过了开始部分")
+                                    
+                                    # 在临时文件开头填充零，以匹配期望的偏移量
+                                    logger.info(f"填充文件开头 {offset} 字节的零")
+                                    f.seek(0)
+                                    zeros = bytearray(min(1024*1024, offset))  # 最多一次写入1MB
+                                    
+                                    # 分块写入零以避免内存问题
+                                    remaining = offset
+                                    while remaining > 0:
+                                        write_size = min(remaining, len(zeros))
+                                        f.write(zeros[:write_size])
+                                        f.flush()
+                                        remaining -= write_size
+                                    
+                                    # 确保文件指针正确
+                                    f.seek(offset)
+                                    bytes_received = offset
+                                    logger.info(f"已填充零至偏移量 {offset}，更新接收位置")
+                                    
+                                    # 添加数据到内存缓冲区
+                                    received_data.extend(bytearray(offset))
+                                    continue
+                                
+                                # 检查是否是断点续传问题
+                                if gap_size <= 65536 and bytes_received == 0:  # 小于64KB的差距可能是发送方使用的块大小
+                                    logger.warning(f"收到的第一个数据块偏移量为 {offset}，可能是块大小同步问题")
+                                    
+                                    # 填充零到文件，并调整接收位置
+                                    zero_block = bytearray(gap_size)
+                                    f.write(zero_block)
+                                    f.flush()
+                                    os.fsync(f.fileno())
+                                    
+                                    # 更新接收位置
+                                    bytes_received = offset
+                                    received_data.extend(zero_block)
+                                    logger.info(f"已填充 {gap_size} 字节的零，并更新接收位置到 {bytes_received}")
+                                elif gap_size > 10 * 1024 * 1024:  # 超过10MB的缺口认为是错误
+                                    logger.error(f"偏移量差异过大 ({gap_size} 字节)，可能是错误数据")
+                                    if retry_count >= max_retries:
+                                        raise ConnectionError("偏移量差异过大")
+                                    retry_count += 1
+                                    time.sleep(2)
+                                    continue
+                                else:
+                                    # 记录错误但不再用零填充，可能导致文件损坏
+                                    logger.error(f"文件传输存在数据缺口 {gap_size} 字节，不再填充零。这可能导致文件损坏。")
+                                    
+                                    # 如果有大量数据缺失，可能是传输出现了严重问题
+                                    if gap_size > 1024 * 1024:  # 超过1MB的缺口
+                                        logger.error(f"数据缺口过大，放弃当前传输并重试")
+                                        if retry_count >= max_retries:
+                                            raise ConnectionError("数据缺口过大")
+                                        retry_count += 1
+                                        time.sleep(2)
+                                        continue
+                                        
+                                # 更新文件位置
+                                current_pos = f.tell()
+                                if current_pos != offset:
+                                    logger.info(f"调整文件位置从 {current_pos} 到 {offset}")
+                                    f.seek(offset)
+                                
+                                # 更新已接收字节数到当前偏移量
+                                bytes_received = offset
+                            elif offset < bytes_received:
+                                # 收到了旧数据块，检查是否为重复
+                                if offset + chunk_size <= bytes_received:
+                                    # 完全重复的数据块，跳过
+                                    logger.warning(f"跳过完全重复的数据块: 偏移量={offset}, 大小={chunk_size}")
+                                    
+                                    # 接收但不处理数据块
+                                    dummy_chunk = recv_all(client_sock, chunk_size)
+                                    if not dummy_chunk or len(dummy_chunk) < chunk_size:
+                                        logger.error("接收重复数据块失败")
+                                        if retry_count >= max_retries:
+                                            raise ConnectionError("接收重复数据块失败")
+                                        retry_count += 1
+                                        time.sleep(2)
+                                    continue
+                                else:
+                                    # 部分重叠的数据块，计算新数据的起始位置
+                                    overlap = bytes_received - offset
+                                    logger.warning(f"数据块部分重叠 {overlap} 字节，调整接收位置")
+                                    
+                                    # 接收完整数据块
+                                    full_chunk = recv_all(client_sock, chunk_size)
+                                    if not full_chunk or len(full_chunk) < chunk_size:
+                                        logger.error("接收重叠数据块失败")
+                                        if retry_count >= max_retries:
+                                            raise ConnectionError("接收重叠数据块失败")
+                                        retry_count += 1
+                                        time.sleep(2)
+                                        continue
+                                    
+                                    # 只使用非重叠部分
+                                    chunk = full_chunk[overlap:]
+                                    chunk_size = len(chunk)
+                                    
+                                    # 更新用于日志的偏移量
+                                    offset = bytes_received
+                        
                         logger.debug(f"成功接收数据块头部，块大小: {chunk_size} 字节，偏移量: {offset}")
                         
                         # 接收数据块
@@ -1197,25 +1385,78 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                             # 重置重试计数器，因为接收成功
                             retry_count = 0
                             
-                            # 写入文件
+                            # 写入文件 - 增强版本，确保数据确实写入磁盘
                             logger.debug(f"接收到数据块，大小: {len(chunk)} 字节，正在写入文件")
-                            f.write(chunk)
-                            # 确保数据写入磁盘
-                            f.flush()
-                            os.fsync(f.fileno())
-                            logger.debug("数据已写入磁盘")
                             
-                            # 保存数据到内存中，用于可能的恢复
-                            received_data.extend(chunk)
+                            try:
+                                # 先记录当前文件位置
+                                current_pos = f.tell()
+                                
+                                # 写入数据
+                                bytes_written = f.write(chunk)
+                                
+                                # 立即刷新缓冲区
+                                f.flush()
+                                
+                                # 强制操作系统写入物理介质
+                                os.fsync(f.fileno())
+                                
+                                # 获取新位置
+                                new_pos = f.tell()
+                                actual_written = new_pos - current_pos
+                                
+                                # 验证写入是否完整
+                                if actual_written != len(chunk):
+                                    logger.warning(f"数据块写入不完整: 预期 {len(chunk)} 字节，实际写入 {actual_written} 字节")
+                                    
+                                    # 检查磁盘剩余空间
+                                    import shutil
+                                    disk_usage = shutil.disk_usage(os.path.dirname(temp_file_path))
+                                    free_space = disk_usage.free
+                                    logger.info(f"磁盘剩余空间: {free_space} 字节")
+                                    
+                                    if free_space < chunk_size * 2:
+                                        logger.error("磁盘空间不足，可能导致写入失败")
+                                
+                                # 安全起见，只计算实际写入的字节数
+                                logger.debug(f"实际写入字节数: {actual_written}")
+                                bytes_received += actual_written
+                                
+                                # 将实际写入的数据保存到内存
+                                if actual_written == len(chunk):
+                                    received_data.extend(chunk)
+                                else:
+                                    received_data.extend(chunk[:actual_written])
+                            except Exception as write_error:
+                                logger.error(f"写入文件时出错: {write_error}")
+                                logger.error(traceback.format_exc())
+                                
+                                # 添加更多错误信息
+                                import errno
+                                if isinstance(write_error, IOError) and write_error.errno == errno.ENOSPC:
+                                    logger.error("磁盘空间不足错误")
+                                
+                                # 尽管写入失败，但我们已经接收了数据，保存到内存
+                                received_data.extend(chunk)
+                                
+                                # 记录接收的字节数，即使写入失败
+                                bytes_received += len(chunk)
+                                
+                                if retry_count >= max_retries:
+                                    raise
+                                
+                                retry_count += 1
+                                logger.info(f"写入失败，将在下一次循环中重试 (尝试 {retry_count}/{max_retries})")
+                                continue
                             
-                            bytes_received += len(chunk)
+                            # 更新任务进度
+                            task.update_progress(bytes_received)
                             
                             # 更新进度
                             current_time = time.time()
                             if current_time - last_progress_update >= progress_update_interval:
                                 # 替换对task.progress的直接引用，改用计算的百分比
                                 progress_percent = (bytes_received / expected_size) * 100 if expected_size > 0 else 0
-                                task.update_progress(bytes_received)
                                 last_progress_update = current_time
                                 logger.info(f"文件传输进度: {progress_percent:.2f}%，已接收: {bytes_received}/{expected_size} 字节")
                             
@@ -1255,13 +1496,62 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         
         # 验证接收到的数据大小
         logger.info(f"验证接收到的数据大小: 预期 {expected_size}，实际 {bytes_received}")
+        
+        # 确保文件实际大小与接收字节数匹配
+        if os.path.exists(temp_file_path):
+            # 重新打开文件以确保所有写入内容已同步
+            with open(temp_file_path, 'ab') as f:
+                # 刷新所有可能的缓冲区
+                f.flush()
+                os.fsync(f.fileno())
+            
+            # 再次读取文件大小
+            temp_size = os.path.getsize(temp_file_path)
+            logger.info(f"临时文件验证: {temp_file_path}, 大小: {temp_size} 字节")
+            
+            # 如果文件大小与接收字节数不一致，但我们有完整数据在内存中
+            if temp_size != bytes_received and len(received_data) >= bytes_received:
+                logger.warning(f"文件大小不匹配：接收了{bytes_received}字节，但文件大小为{temp_size}字节")
+                logger.info("尝试从内存缓冲区重新写入文件...")
+                
+                # 从内存重写文件
+                with open(temp_file_path, 'wb') as f:
+                    f.write(received_data[:bytes_received])
+                    f.flush()
+                    os.fsync(f.fileno())
+                
+                # 再次检查文件大小
+                new_size = os.path.getsize(temp_file_path)
+                logger.info(f"重写后文件大小: {new_size} 字节")
+                
+                if new_size == bytes_received:
+                    logger.info("文件修复成功，大小现在匹配")
+                else:
+                    logger.error(f"文件修复失败，大小仍然不匹配：{new_size} vs {bytes_received}")
+            
+            # 更新bytes_received以匹配实际文件大小
+            if temp_size != bytes_received:
+                logger.warning(f"调整bytes_received从{bytes_received}到{temp_size}以匹配文件实际大小")
+                bytes_received = temp_size
+                task.update_progress(bytes_received)
+        
         if bytes_received != expected_size:
             logger.error(f"文件大小不匹配: 预期 {expected_size}，实际接收 {bytes_received}")
             task.status = "failed"
             task.error_message = "文件大小不匹配"
             if os.path.exists(temp_file_path):
+                # 保存不完整文件以备分析
+                incomplete_copy = f"{temp_file_path}.incomplete"
+                try:
+                    import shutil
+                    shutil.copy2(temp_file_path, incomplete_copy)
+                    logger.info(f"已保存不完整文件以供分析: {incomplete_copy}")
+                except Exception as e:
+                    logger.error(f"保存不完整文件副本失败: {e}")
+                
+                # 删除不完整文件
+                os.remove(temp_file_path)
                 logger.info(f"删除不完整文件: {temp_file_path}")
-                os.remove(temp_file_path)  # 删除不完整文件
             return
         
         # 检查临时文件是否存在和大小是否正确
@@ -1278,19 +1568,91 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         # 验证文件哈希(如果有)
         if task.file_info.file_hash:
             try:
-                logger.info(f"开始验证文件哈希值: {task.file_info.file_hash}")
+                logger.info(f"开始验证文件哈希值: {task.file_info.file_hash}，使用FileInfo.verify_hash方法")
+                
+                # 添加调试信息
+                logger.info(f"====== 文件详细信息 ======")
+                logger.info(f"临时文件路径: {temp_file_path}")
+                logger.info(f"文件大小: {os.path.getsize(temp_file_path)} 字节")
+                
+                # 检查文件是否为空或包含全零数据
+                with open(temp_file_path, 'rb') as check_f:
+                    first_block = check_f.read(8192)
+                    if not first_block or all(b == 0 for b in first_block):
+                        logger.error("文件内容异常：文件起始部分全为空或零")
+                        
+                        # 如果文件前面是全零，尝试查找非零起始位置
+                        logger.info("尝试检测文件中非零数据的起始位置...")
+                        check_f.seek(0)
+                        position = 0
+                        while True:
+                            block = check_f.read(8192)
+                            if not block:
+                                break
+                                
+                            for i, byte in enumerate(block):
+                                if byte != 0:
+                                    position = position + i
+                                    logger.info(f"在偏移量 {position} 处找到非零数据")
+                                    check_f.seek(position)
+                                    nonzero_block = check_f.read(100)
+                                    hex_content = ' '.join(f'{b:02x}' for b in nonzero_block)
+                                    logger.info(f"非零数据的十六进制表示: {hex_content}")
+                                    
+                                    # 退出所有循环
+                                    break
+                            else:
+                                position += len(block)
+                                continue
+                            break
+                
+                # 计算并显示文件的前1024字节的哈希，用于调试
                 with open(temp_file_path, 'rb') as f:
-                    file_hash = compute_file_hash(f)
-                    logger.info(f"计算得到的哈希值: {file_hash}")
-                    if file_hash != task.file_info.file_hash:
-                        logger.error(f"文件哈希不匹配: 预期 {task.file_info.file_hash}，计算得到 {file_hash}")
-                        task.status = "failed"
-                        task.error_message = "文件哈希不匹配"
-                        os.remove(temp_file_path)  # 删除不完整文件
-                        return
-                    logger.info("文件哈希验证通过")
+                    first_bytes = f.read(1024)
+                    import hashlib
+                    first_bytes_hash = hashlib.sha256(first_bytes).hexdigest()
+                    logger.info(f"文件起始部分(1KB)的SHA-256哈希: {first_bytes_hash}")
+                    # 文件内容的十六进制表示(前100字节)
+                    hex_content = ' '.join(f'{b:02x}' for b in first_bytes[:100])
+                    logger.info(f"文件起始部分的十六进制表示: {hex_content}")
+                
+                # 创建临时的FileInfo对象用于验证
+                from transfer import FileInfo
+                temp_file_info = FileInfo(file_path=temp_file_path)
+                temp_file_info.file_hash = task.file_info.file_hash
+                
+                # 使用FileInfo的verify_hash方法验证
+                is_valid = temp_file_info.verify_hash(temp_file_path)
+                
+                if not is_valid:
+                    logger.error(f"文件哈希不匹配: 预期 {task.file_info.file_hash}")
+                    # 重新计算哈希并记录，用于调试
+                    calculated_hash = temp_file_info.calculate_file_hash(temp_file_path)
+                    logger.error(f"计算得到的哈希值: {calculated_hash}")
+                    
+                    # 请求发送方提供文件头部信息以帮助诊断
+                    self._request_file_header_verification(task, calculated_hash)
+                    
+                    # 尝试与发送端沟通，了解实际文件大小和文件头信息
+                    logger.info("文件可能已损坏。请让发送方确认文件头部内容以帮助诊断问题。")
+                    task.status = "failed"
+                    task.error_message = "文件哈希不匹配"
+                    
+                    # 调试用：保留不匹配的文件以供分析
+                    mismatch_debug_path = f"{temp_file_path}.mismatch"
+                    try:
+                        import shutil
+                        shutil.copy2(temp_file_path, mismatch_debug_path)
+                        logger.info(f"已保存不匹配的文件副本用于调试: {mismatch_debug_path}")
+                    except Exception as e:
+                        logger.error(f"保存调试文件失败: {e}")
+                    
+                    os.remove(temp_file_path)  # 删除不完整文件
+                    return
+                logger.info("文件哈希验证通过")
             except Exception as e:
                 logger.error(f"计算文件哈希值出错: {e}")
+                logger.error(traceback.format_exc())
                 # 继续处理，不因哈希计算失败而中断
         
         # 将临时文件重命名为最终文件
@@ -1502,6 +1864,204 @@ def _send_transfer_complete(self, task: TransferTask):
         logger.error(f"发送完成消息失败: {e}")
         # 这不影响本地文件的完成状态
 
+def _request_file_header_verification(self, task: TransferTask, calculated_hash: str):
+    """
+    请求发送方提供文件头部内容以进行验证和诊断
+    
+    Args:
+        task: 传输任务
+        calculated_hash: 接收方计算出的文件哈希值
+    """
+    if not task or not task.device:
+        logger.error("无法请求文件头部验证：任务信息不完整")
+        return
+        
+    try:
+        # 创建请求头部内容的消息
+        request_payload = {
+            "transfer_id": task.transfer_id,
+            "file_id": task.file_info.file_id,
+            "action": "file_header_verify",
+            "calculated_hash": calculated_hash,
+            "expected_hash": task.file_info.file_hash
+        }
+        
+        # 使用专门的消息类型
+        verify_message = Message(MessageType.FILE_HEADER_VERIFY, request_payload)
+        
+        # 发送请求
+        logger.info(f"正在向发送方请求文件头部诊断数据: {task.device.device_name}")
+        self.network_manager.send_message(task.device, verify_message)
+        
+        # 记录请求已发送
+        logger.info(f"已发送文件头部诊断请求，等待发送方回应")
+    except Exception as e:
+        logger.error(f"发送文件头部验证请求失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+
+def _handle_file_header_verify_request(self, message: Message, addr: Tuple[str, int]):
+    """
+    处理文件头部验证请求
+    
+    Args:
+        message: 请求消息
+        addr: 发送方地址
+    """
+    payload = message.payload
+    transfer_id = payload.get("transfer_id")
+    file_id = payload.get("file_id")
+    calculated_hash = payload.get("calculated_hash")
+    expected_hash = payload.get("expected_hash")
+    
+    if not transfer_id or not file_id:
+        logger.error("无效的文件头部验证请求: 缺少必要参数")
+        return
+        
+    # 在发送任务中查找对应的文件
+    task = self.send_tasks.get(transfer_id)
+    if not task:
+        logger.error(f"找不到对应的发送任务: {transfer_id}")
+        return
+        
+    if task.file_info.file_id != file_id:
+        logger.error(f"文件ID不匹配: 预期 {task.file_info.file_id}, 收到 {file_id}")
+        return
+        
+    try:
+        # 获取文件头部信息用于诊断
+        file_path = task.file_info.file_path
+        if not file_path or not os.path.exists(file_path):
+            logger.error(f"源文件不存在: {file_path}")
+            return
+            
+        # 读取文件头部(前8KB)用于诊断
+        with open(file_path, 'rb') as f:
+            header_data = f.read(8192)  # 读取前8KB
+            
+            # 计算头部的哈希值
+            header_hash = hashlib.sha256(header_data).hexdigest()
+            
+            # 显示头部的十六进制表示(前256字节)
+            hex_header = ' '.join(f'{b:02x}' for b in header_data[:256])
+            
+            # 获取文件基本信息
+            file_size = os.path.getsize(file_path)
+            
+            # 创建响应消息
+            response_payload = {
+                "transfer_id": transfer_id,
+                "file_id": file_id,
+                "action": "file_header_verify_response",
+                "source_size": file_size,
+                "header_hash": header_hash,
+                "header_hex": hex_header,
+                "file_hash": task.file_info.file_hash
+            }
+            
+            # 使用专门的消息类型
+            response_message = Message(MessageType.FILE_HEADER_RESPONSE, response_payload)
+            
+            # 创建用于回应的设备信息
+            from network import DeviceInfo
+            recipient_device = DeviceInfo(
+                device_id="temp_id",
+                device_name="接收方",
+                ip_address=addr[0],
+                port=addr[1]
+            )
+            
+            # 发送响应
+            logger.info(f"正在发送文件头部诊断数据到: {addr[0]}:{addr[1]}")
+            logger.info(f"文件大小: {file_size} 字节")
+            logger.info(f"头部哈希: {header_hash}")
+            logger.info(f"头部十六进制(部分): {hex_header[:100]}...")
+            
+            # 发送响应
+            self.network_manager.send_message(recipient_device, response_message)
+            logger.info("文件头部诊断数据已发送")
+    except Exception as e:
+        logger.error(f"处理文件头部验证请求失败: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+
+def _handle_file_header_verify_response(self, message: Message, addr: Tuple[str, int]):
+    """
+    处理接收到的文件头部验证响应
+    
+    Args:
+        message: 响应消息
+        addr: 发送方地址
+    """
+    payload = message.payload
+    transfer_id = payload.get("transfer_id")
+    file_id = payload.get("file_id")
+    source_size = payload.get("source_size")
+    header_hash = payload.get("header_hash")
+    header_hex = payload.get("header_hex")
+    file_hash = payload.get("file_hash")
+    
+    if not transfer_id or not file_id:
+        logger.error("无效的文件头部验证响应: 缺少必要参数")
+        return
+    
+    # 在接收任务中查找对应的文件
+    task = self.receive_tasks.get(transfer_id)
+    if not task:
+        logger.error(f"找不到对应的接收任务: {transfer_id}")
+        return
+    
+    # 记录诊断信息
+    logger.info("=" * 50)
+    logger.info("收到文件头部诊断响应")
+    logger.info(f"传输ID: {transfer_id}")
+    logger.info(f"文件ID: {file_id}")
+    logger.info(f"源文件大小: {source_size} 字节")
+    logger.info(f"头部哈希: {header_hash}")
+    logger.info(f"文件哈希: {file_hash}")
+    logger.info(f"头部十六进制(部分): {header_hex[:100]}...")
+    
+    # 对比本地接收的文件
+    # 如果存在保存的不匹配文件，读取其头部进行对比
+    mismatch_debug_path = f"{task.file_info.save_path}.mismatch"
+    if os.path.exists(mismatch_debug_path):
+        try:
+            with open(mismatch_debug_path, 'rb') as f:
+                local_header = f.read(8192)  # 读取相同大小的头部
+                local_header_hash = hashlib.sha256(local_header).hexdigest()
+                local_header_hex = ' '.join(f'{b:02x}' for b in local_header[:256])
+                
+                logger.info("本地接收文件头部信息:")
+                logger.info(f"本地头部哈希: {local_header_hash}")
+                logger.info(f"本地头部十六进制(部分): {local_header_hex[:100]}...")
+                
+                # 对比头部哈希
+                if header_hash != local_header_hash:
+                    logger.error("文件头部哈希不匹配，文件传输可能存在问题")
+                    # 查找头部差异的位置
+                    min_len = min(len(local_header), len(header_hex.split()))
+                    for i in range(min_len):
+                        remote_byte = int(header_hex.split()[i], 16) if i < len(header_hex.split()) else None
+                        local_byte = local_header[i] if i < len(local_header) else None
+                        
+                        if remote_byte != local_byte:
+                            logger.error(f"在位置 {i} 处发现差异: 源文件={remote_byte:02x}, 本地文件={local_byte:02x}")
+                            # 只报告前10个差异
+                            if i >= 10:
+                                logger.error("差异过多，停止报告")
+                                break
+                else:
+                    logger.info("文件头部哈希匹配，可能是传输过程中后续部分出现问题")
+        except Exception as e:
+            logger.error(f"分析本地文件时出错: {e}")
+    else:
+        logger.warning(f"找不到本地不匹配文件副本: {mismatch_debug_path}")
+    
+    logger.info("=" * 50)
+    logger.info("诊断结论: 请检查网络连接质量，可能由于网络原因导致文件传输过程中数据损坏")
+    logger.info("建议尝试重新传输文件或使用更可靠的网络连接")
+    logger.info("=" * 50)
+
 # 将方法添加到 TransferManager 类
 setattr(TransferManager, "_transfer_server_loop", _transfer_server_loop)
 setattr(TransferManager, "_handle_client_connection", _handle_client_connection)
@@ -1516,4 +2076,9 @@ setattr(TransferManager, "_receive_file", _receive_file)
 setattr(TransferManager, "_on_file_progress", _on_file_progress)
 setattr(TransferManager, "_on_file_complete", _on_file_complete)
 setattr(TransferManager, "_on_file_error", _on_file_error)
-setattr(TransferManager, "_send_transfer_complete", _send_transfer_complete) 
+setattr(TransferManager, "_send_transfer_complete", _send_transfer_complete)
+
+# 添加新增的诊断方法注册
+setattr(TransferManager, "_request_file_header_verification", _request_file_header_verification)
+setattr(TransferManager, "_handle_file_header_verify_request", _handle_file_header_verify_request)
+setattr(TransferManager, "_handle_file_header_verify_response", _handle_file_header_verify_response) 
