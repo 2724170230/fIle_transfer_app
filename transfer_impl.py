@@ -736,10 +736,31 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
         
         # 计算文件哈希值（如果尚未计算），确保使用SHA-256算法
         if not file_info.file_hash:
-            logger.info("计算文件哈希值，使用算法: SHA-256")
+            logger.info("计算文件哈希值，使用FileInfo.compute_hash方法 (SHA-256)")
+            
+            # 添加调试信息
+            logger.info(f"====== 发送文件详细信息 ======")
+            logger.info(f"文件路径: {file_info.file_path}")
+            logger.info(f"文件大小: {os.path.getsize(file_info.file_path)} 字节")
+            
+            # 计算并显示文件的前1024字节的哈希，用于调试
+            with open(file_info.file_path, 'rb') as f:
+                first_bytes = f.read(1024)
+                import hashlib
+                first_bytes_hash = hashlib.sha256(first_bytes).hexdigest()
+                logger.info(f"发送文件起始部分(1KB)的SHA-256哈希: {first_bytes_hash}")
+                # 文件内容的十六进制表示(前100字节)
+                hex_content = ' '.join(f'{b:02x}' for b in first_bytes[:100])
+                logger.info(f"发送文件起始部分的十六进制表示: {hex_content}")
+            
             # 使用FileInfo的compute_hash方法，它会使用SHA-256
-            file_info.compute_hash()
-            logger.info(f"文件哈希值计算完成: {file_info.file_hash}")
+            hash_value = file_info.compute_hash()
+            logger.info(f"文件哈希值计算完成: {hash_value}")
+            
+            # 确认哈希值已正确设置
+            if not file_info.file_hash or file_info.file_hash != hash_value:
+                logger.warning(f"手动设置文件哈希值: {hash_value}")
+                file_info.file_hash = hash_value
         
         # 打开文件并发送数据
         file_size = file_info.file_size
@@ -1335,19 +1356,54 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         # 验证文件哈希(如果有)
         if task.file_info.file_hash:
             try:
-                logger.info(f"开始验证文件哈希值: {task.file_info.file_hash}，使用SHA-256算法")
+                logger.info(f"开始验证文件哈希值: {task.file_info.file_hash}，使用FileInfo.verify_hash方法")
+                
+                # 添加调试信息
+                logger.info(f"====== 文件详细信息 ======")
+                logger.info(f"临时文件路径: {temp_file_path}")
+                logger.info(f"文件大小: {os.path.getsize(temp_file_path)} 字节")
+                
+                # 计算并显示文件的前1024字节的哈希，用于调试
                 with open(temp_file_path, 'rb') as f:
-                    file_hash = compute_file_hash(f, algorithm='sha256')
-                    logger.info(f"使用SHA-256算法计算得到的哈希值: {file_hash}")
-                    if file_hash != task.file_info.file_hash:
-                        logger.error(f"文件哈希不匹配: 预期 {task.file_info.file_hash}，计算得到 {file_hash}")
-                        task.status = "failed"
-                        task.error_message = "文件哈希不匹配"
-                        os.remove(temp_file_path)  # 删除不完整文件
-                        return
-                    logger.info("文件哈希验证通过")
+                    first_bytes = f.read(1024)
+                    import hashlib
+                    first_bytes_hash = hashlib.sha256(first_bytes).hexdigest()
+                    logger.info(f"文件起始部分(1KB)的SHA-256哈希: {first_bytes_hash}")
+                    # 文件内容的十六进制表示(前100字节)
+                    hex_content = ' '.join(f'{b:02x}' for b in first_bytes[:100])
+                    logger.info(f"文件起始部分的十六进制表示: {hex_content}")
+                
+                # 创建临时的FileInfo对象用于验证
+                from transfer import FileInfo
+                temp_file_info = FileInfo(file_path=temp_file_path)
+                temp_file_info.file_hash = task.file_info.file_hash
+                
+                # 使用FileInfo的verify_hash方法验证
+                is_valid = temp_file_info.verify_hash(temp_file_path)
+                
+                if not is_valid:
+                    logger.error(f"文件哈希不匹配: 预期 {task.file_info.file_hash}")
+                    # 重新计算哈希并记录，用于调试
+                    calculated_hash = temp_file_info.calculate_file_hash(temp_file_path)
+                    logger.error(f"计算得到的哈希值: {calculated_hash}")
+                    task.status = "failed"
+                    task.error_message = "文件哈希不匹配"
+                    
+                    # 调试用：保留不匹配的文件以供分析
+                    mismatch_debug_path = f"{temp_file_path}.mismatch"
+                    try:
+                        import shutil
+                        shutil.copy2(temp_file_path, mismatch_debug_path)
+                        logger.info(f"已保存不匹配的文件副本用于调试: {mismatch_debug_path}")
+                    except Exception as e:
+                        logger.error(f"保存调试文件失败: {e}")
+                    
+                    os.remove(temp_file_path)  # 删除不完整文件
+                    return
+                logger.info("文件哈希验证通过")
             except Exception as e:
                 logger.error(f"计算文件哈希值出错: {e}")
+                logger.error(traceback.format_exc())
                 # 继续处理，不因哈希计算失败而中断
         
         # 将临时文件重命名为最终文件
