@@ -7,8 +7,8 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, 
                              QProgressBar, QListWidget, QListWidgetItem, QStackedWidget, 
                              QFrame, QSplitter, QGridLayout, QSpacerItem, QSizePolicy,
-                             QButtonGroup, QToolButton, QAction, QPropertyAnimation)
-from PyQt5.QtCore import Qt, QSize, pyqtSignal, QMimeData, QUrl, QTimer, QRect, QPoint, QPointF
+                             QButtonGroup, QToolButton, QAction)
+from PyQt5.QtCore import Qt, QSize, pyqtSignal, QMimeData, QUrl, QTimer, QRect, QPoint, QPointF, QPropertyAnimation
 from PyQt5.QtGui import QIcon, QColor, QPalette, QFont, QDrag, QPainter, QPen, QBrush, QPainterPath, QRadialGradient, QLinearGradient, QTransform
 
 # 更高对比度的赛博朋克风格色调
