@@ -472,7 +472,7 @@ class SendNowApp(MainWindow):
         """处理客户端传输完成事件"""
         logger.info(f"文件发送完成: {filename} - {response}")
         
-        # 更新状态面板显示完成
+        # 更新状态面板显示完成（使用的是SendStatusPanel，没有打开文件按钮）
         self.sendPanel.statusPanel.showCompleted(filename)
         
         # 重置发送按钮
