@@ -204,6 +204,9 @@ class SendNowApp(MainWindow):
     def __init__(self):
         super().__init__()
         
+        # 设置窗口固定比例和初始大小
+        self.resize(self.DEFAULT_WIDTH, self.DEFAULT_HEIGHT)
+        
         # 获取或生成设备名称和ID
         self.device_name, self.device_id = DeviceNameGenerator.get_persistent_name_and_id()
         logger.info(f"设备信息: {self.device_name} {self.device_id}")

@@ -94,8 +94,13 @@ class DynamicLogoWidget(QWidget):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(160, 160)
-        self.setMaximumSize(240, 240)
+        self.setMinimumSize(120, 120)  # 减小最小尺寸
+        self.setMaximumSize(240, 240)  # 保持最大尺寸
+        
+        # 设置大小策略为保持宽高比
+        sizePolicy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        sizePolicy.setHeightForWidth(True)
+        self.setSizePolicy(sizePolicy)
         
         # 动画计时器
         self.timer = QTimer(self)
@@ -115,7 +120,15 @@ class DynamicLogoWidget(QWidget):
         self.scale_factor = 1.0
         self.target_scale = 1.0
         self.animation_speed = 0.05  # 收缩/扩张动画的速度
-        
+    
+    def heightForWidth(self, width):
+        """保持宽高比1:1"""
+        return width
+    
+    def hasHeightForWidth(self):
+        """告诉布局管理器这个组件要保持宽高比"""
+        return True
+    
     def paintEvent(self, event):
         """绘制标志"""
         painter = QPainter(self)
@@ -802,19 +815,29 @@ class ReceivePanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)  # 增加边距
+        layout.setContentsMargins(20, 20, 20, 20)  # 边距
+        
+        # 设置尺寸策略
+        sizePolicy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        sizePolicy.setVerticalStretch(1)
+        self.setSizePolicy(sizePolicy)
         
         # 创建一个内容容器
         contentWidget = QWidget()
         contentLayout = QVBoxLayout(contentWidget)
-        contentLayout.setContentsMargins(25, 30, 25, 30)  # 增加内边距提高内容集中度
+        contentLayout.setContentsMargins(25, 30, 25, 30)  # 内边距提高内容集中度
         contentLayout.setSpacing(20)
         
         # 获取设备名称和ID
         self.device_name, self.device_id = DeviceNameGenerator.get_persistent_name_and_id()
         
         # 添加动态标志
+        logoContainer = QWidget()
+        logoLayout = QVBoxLayout(logoContainer)
+        logoLayout.setContentsMargins(0, 0, 0, 0)
+        
         self.logoWidget = DynamicLogoWidget()
+        logoLayout.addWidget(self.logoWidget, 0, Qt.AlignCenter)
         
         # 设备名称和ID标签
         titleLabel = QLabel(self.device_name)
@@ -910,7 +933,7 @@ class ReceivePanel(QWidget):
         self.statusPanel.setVisible(False)
         
         # 设置主布局
-        contentLayout.addWidget(self.logoWidget, 0, Qt.AlignCenter)  # 居中显示标志
+        contentLayout.addWidget(logoContainer, 0, Qt.AlignCenter)  # 居中显示标志
         contentLayout.addWidget(titleLabel)
         contentLayout.addWidget(deviceIdLabel)
         contentLayout.addSpacing(10)  # 在标题和开关之间添加额外空间
@@ -981,10 +1004,16 @@ class SendPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)  # 增加边距
+        layout.setContentsMargins(20, 20, 20, 20)  # 边距
+        
+        # 设置尺寸策略
+        sizePolicy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        sizePolicy.setVerticalStretch(1)
+        self.setSizePolicy(sizePolicy)
         
         # ===== 顶部区域：附件列表 =====
         topAreaWidget = QWidget()
+        topAreaWidget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         topAreaLayout = QVBoxLayout(topAreaWidget)
         topAreaLayout.setContentsMargins(15, 15, 15, 15)  # 内部边距
         
@@ -1039,6 +1068,7 @@ class SendPanel(QWidget):
         
         # 文件列表区域
         self.fileListWidget = QWidget()
+        self.fileListWidget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         fileListLayout = QVBoxLayout(self.fileListWidget)
         fileListLayout.setContentsMargins(0, 0, 0, 0)  # 减少内部边距
         
@@ -1089,7 +1119,7 @@ class SendPanel(QWidget):
         
         # 添加到顶部区域布局
         topAreaLayout.addLayout(titleBarLayout)
-        topAreaLayout.addWidget(self.fileListWidget)
+        topAreaLayout.addWidget(self.fileListWidget, 1)  # 使用比例因子1
         topAreaLayout.addWidget(buttonAreaWidget)
         
         # 设置顶部区域样式
@@ -1097,7 +1127,6 @@ class SendPanel(QWidget):
             background-color: {PANEL_BG};
             border-radius: 8px;
             border: none;
-            box-shadow: 0px 2px 8px rgba(0, 0, 0, 0.15);
         """)
         
         # ===== 发送状态面板 =====
@@ -1108,6 +1137,7 @@ class SendPanel(QWidget):
         
         # 搜索设备组件
         self.deviceSearchWidget = QWidget()
+        self.deviceSearchWidget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         searchLayout = QVBoxLayout(self.deviceSearchWidget)
         searchLayout.setContentsMargins(15, 15, 15, 15)  # 内部边距
         
@@ -1213,15 +1243,14 @@ class SendPanel(QWidget):
             background-color: {PANEL_BG};
             border-radius: 8px;
             border: none;
-            box-shadow: 0px 2px 8px rgba(0, 0, 0, 0.15);
         """)
         
         # 添加到主布局
-        layout.addWidget(topAreaWidget)
+        layout.addWidget(topAreaWidget, 3)  # 给顶部区域分配3份比例
         layout.addSpacing(10)
         layout.addWidget(self.statusPanel)  # 添加状态面板
         layout.addSpacing(10)
-        layout.addWidget(self.deviceSearchWidget)
+        layout.addWidget(self.deviceSearchWidget, 2)  # 给设备列表分配2份比例
         layout.addSpacing(10)
         layout.addWidget(self.sendButton, 0, Qt.AlignCenter)
         
@@ -1469,7 +1498,6 @@ class SettingsPanel(QWidget):
             background-color: {PANEL_BG};
             border-radius: 12px;
             border: none;
-            box-shadow: 0px 3px 10px rgba(0, 0, 0, 0.2);
         """)
         
         # 添加到主布局
@@ -1484,13 +1512,19 @@ class SettingsPanel(QWidget):
 class MainWindow(QMainWindow):
     """主窗口"""
     
+    # 设置默认窗口尺寸和比例常量
+    DEFAULT_WIDTH = 1000
+    DEFAULT_HEIGHT = 700
+    ASPECT_RATIO = DEFAULT_WIDTH / DEFAULT_HEIGHT  # 宽高比例常量
+    
     def __init__(self):
         super().__init__()
         self.initUI()
     
     def initUI(self):
         self.setWindowTitle("SendNow")  # 修改窗口标题
-        self.setMinimumSize(900, 600)  # 稍微增大窗口最小尺寸
+        self.setMinimumSize(900, 600)  # 最小窗口尺寸
+        self.resize(self.DEFAULT_WIDTH, self.DEFAULT_HEIGHT)  # 设置默认大小
         
         # 设置应用风格
         self.setStyleSheet(f"""
@@ -1606,6 +1640,26 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentWidget(self.sendPanel)
         elif button == self.settingsButton:
             self.stack.setCurrentWidget(self.settingsPanel)
+            
+    def resizeEvent(self, event):
+        """重写调整大小事件，保持宽高比"""
+        super().resizeEvent(event)
+        
+        # 获取当前尺寸
+        width = event.size().width()
+        height = event.size().height()
+        current_ratio = width / height
+        
+        # 如果当前比例与目标比例相差太大，调整窗口大小
+        if abs(current_ratio - self.ASPECT_RATIO) > 0.05:  # 允许5%的误差
+            if current_ratio > self.ASPECT_RATIO:
+                # 当前窗口太宽，根据高度调整宽度
+                new_width = int(height * self.ASPECT_RATIO)
+                self.resize(new_width, height)
+            else:
+                # 当前窗口太高，根据宽度调整高度
+                new_height = int(width / self.ASPECT_RATIO)
+                self.resize(width, new_height)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
