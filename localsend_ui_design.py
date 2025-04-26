@@ -94,8 +94,8 @@ class DynamicLogoWidget(QWidget):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumSize(120, 120)  # 减小最小尺寸
-        self.setMaximumSize(240, 240)  # 保持最大尺寸
+        self.setMinimumSize(180, 180)  # 增加最小尺寸
+        self.setMaximumSize(300, 300)  # 增加最大尺寸
         
         # 设置大小策略为保持宽高比
         sizePolicy = QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -391,9 +391,11 @@ class FileItemWidget(QWidget):
         super().__init__(parent)
         layout = QVBoxLayout(self)  # 改为垂直布局
         layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(0)  # 删除垂直空间，减少行距
         
         # 顶部布局：文件名和删除按钮
         topLayout = QHBoxLayout()
+        topLayout.setSpacing(5)  # 保持合适的水平间距
         
         # 文件名和大小标签
         self.fileLabel = QLabel(f"{file_name} ({size_str})")
@@ -430,8 +432,8 @@ class FileItemWidget(QWidget):
         
         # 文件路径标签
         self.pathLabel = QLabel(full_path if full_path else "")
-        self.pathLabel.setStyleSheet(f"color: {SECONDARY_TEXT_COLOR}; font-size: 11px;")
-        self.pathLabel.setWordWrap(True)  # 允许自动换行
+        self.pathLabel.setStyleSheet(f"color: {SECONDARY_TEXT_COLOR}; font-size: 11px; margin-top: -5px;")  # 添加负的上边距
+        self.pathLabel.setWordWrap(True)
         self.pathLabel.setTextInteractionFlags(Qt.TextSelectableByMouse)  # 允许用户选择文本
         
         # 添加到主布局
@@ -826,7 +828,7 @@ class ReceivePanel(QWidget):
         contentWidget = QWidget()
         contentLayout = QVBoxLayout(contentWidget)
         contentLayout.setContentsMargins(25, 30, 25, 30)  # 内边距提高内容集中度
-        contentLayout.setSpacing(20)
+        contentLayout.setSpacing(1)  # 减小整体间距
         
         # 获取设备名称和ID
         self.device_name, self.device_id = DeviceNameGenerator.get_persistent_name_and_id()
@@ -835,6 +837,7 @@ class ReceivePanel(QWidget):
         logoContainer = QWidget()
         logoLayout = QVBoxLayout(logoContainer)
         logoLayout.setContentsMargins(0, 0, 0, 0)
+        logoLayout.setSpacing(0)  # 减小logo内部间距
         
         self.logoWidget = DynamicLogoWidget()
         logoLayout.addWidget(self.logoWidget, 0, Qt.AlignCenter)
@@ -852,7 +855,7 @@ class ReceivePanel(QWidget):
         self.switchWidget = QWidget()
         switchLayout = QHBoxLayout(self.switchWidget)
         switchLayout.setSpacing(0)
-        switchLayout.setContentsMargins(0, 10, 0, 10)
+        switchLayout.setContentsMargins(0, 5, 0, 5)  # 减小垂直方向上的内边距
         
         self.onButton = QPushButton("开")
         self.offButton = QPushButton("关")
@@ -866,7 +869,7 @@ class ReceivePanel(QWidget):
                 background-color: {BUTTON_BG};
                 color: {SECONDARY_TEXT_COLOR};
                 border: none;
-                padding: 8px 25px;
+                padding: 6px 20px;  /* 减小内边距 */
                 border-top-left-radius: 15px;
                 border-bottom-left-radius: 15px;
             }}
@@ -881,7 +884,7 @@ class ReceivePanel(QWidget):
                 background-color: {BUTTON_BG};
                 color: {SECONDARY_TEXT_COLOR};
                 border: none;
-                padding: 8px 25px;
+                padding: 6px 20px;  /* 减小内边距 */
                 border-top-right-radius: 15px;
                 border-bottom-right-radius: 15px;
             }}
@@ -911,10 +914,11 @@ class ReceivePanel(QWidget):
         switchAreaWidget = QWidget()
         switchAreaLayout = QVBoxLayout(switchAreaWidget)
         switchAreaLayout.setContentsMargins(0, 0, 0, 0)
+        switchAreaLayout.setSpacing(2)  # 减小开关区域内部间距
         
         # 状态文字
         statusLayout = QHBoxLayout()
-        statusLayout.setContentsMargins(0, 5, 0, 0)
+        statusLayout.setContentsMargins(0, 2, 0, 0)  # 减小状态文字的上边距
         
         self.statusLabel = QLabel("设备已可被发现")
         self.statusLabel.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 15px;")
@@ -934,9 +938,10 @@ class ReceivePanel(QWidget):
         
         # 设置主布局
         contentLayout.addWidget(logoContainer, 0, Qt.AlignCenter)  # 居中显示标志
+        contentLayout.addSpacing(5)  # 减小logo与标题之间的间距
         contentLayout.addWidget(titleLabel)
         contentLayout.addWidget(deviceIdLabel)
-        contentLayout.addSpacing(10)  # 在标题和开关之间添加额外空间
+        contentLayout.addSpacing(10)  # 在标题和开关之间添加间距
         contentLayout.addWidget(switchAreaWidget)
         contentLayout.addStretch(1)  # 添加弹性空间
         
