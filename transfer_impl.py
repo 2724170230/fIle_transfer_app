@@ -423,7 +423,19 @@ def _handle_file_info(self, message: Message, client_sock: socket.socket, client
     
     # 确保保存路径存在并且有权限写入
     save_dir = self.default_save_dir
-    full_save_path = os.path.join(save_dir, file_info.file_name)
+    if not save_dir:
+        # 如果默认保存目录未设置，使用用户下载目录
+        save_dir = os.path.join(os.path.expanduser("~"), "Downloads", "SendNow")
+    
+    # 确保保存目录是绝对路径
+    save_dir = os.path.abspath(save_dir)
+    
+    # 检查文件名是否合法，替换非法字符
+    file_name = file_info.file_name
+    file_name = file_name.replace('/', '_').replace('\\', '_').replace(':', '_')
+    
+    # 构建完整保存路径
+    full_save_path = os.path.join(save_dir, file_name)
     
     # 创建保存目录
     try:
@@ -436,17 +448,18 @@ def _handle_file_info(self, message: Message, client_sock: socket.socket, client
             # 尝试使用临时目录
             import tempfile
             temp_dir = tempfile.gettempdir()
-            full_save_path = os.path.join(temp_dir, file_info.file_name)
+            full_save_path = os.path.join(temp_dir, file_name)
             logger.info(f"改用临时目录: {temp_dir}, 新保存路径: {full_save_path}")
     except Exception as e:
         logger.error(f"创建保存目录失败: {e}")
         import tempfile
         temp_dir = tempfile.gettempdir()
-        full_save_path = os.path.join(temp_dir, file_info.file_name)
+        full_save_path = os.path.join(temp_dir, file_name)
         logger.info(f"改用临时目录: {temp_dir}, 新保存路径: {full_save_path}")
     
     # 设置文件保存路径
     file_info.save_path = full_save_path
+    file_info.file_name = file_name  # 更新可能已更改的文件名
     # 保存断点续传位置信息
     file_info.resume_offset = resume_offset
     task.file_info = file_info
@@ -736,6 +749,7 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
     save_path = None
     max_retries = 3  # 最大重试次数
     retry_count = 0  # 当前重试次数
+    temp_file_path = None
     
     try:
         # 确认文件信息已设置
@@ -747,14 +761,43 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         task.file_info.status = "receiving"
         
         # 确保目标目录存在
-        save_dir = os.path.dirname(task.file_info.save_path)
-        os.makedirs(save_dir, exist_ok=True)
-        
-        # 将文件名指定为绝对路径
         save_path = task.file_info.save_path
+        save_dir = os.path.dirname(save_path)
+        
+        try:
+            os.makedirs(save_dir, exist_ok=True)
+            logger.info(f"已确保保存目录存在: {save_dir}")
+        except Exception as e:
+            logger.error(f"创建保存目录失败: {e}")
+            # 尝试使用临时目录
+            import tempfile
+            temp_dir = tempfile.gettempdir()
+            save_path = os.path.join(temp_dir, os.path.basename(save_path))
+            save_dir = temp_dir
+            task.file_info.save_path = save_path
+            logger.info(f"改用临时目录: {temp_dir}, 新保存路径: {save_path}")
+            
+            # 再次尝试创建目录
+            os.makedirs(save_dir, exist_ok=True)
+        
+        # 检查目录写入权限
+        if not os.access(save_dir, os.W_OK):
+            logger.error(f"无权限写入目录: {save_dir}")
+            # 尝试使用临时目录
+            import tempfile
+            temp_dir = tempfile.gettempdir()
+            save_path = os.path.join(temp_dir, os.path.basename(save_path))
+            save_dir = temp_dir
+            task.file_info.save_path = save_path
+            logger.info(f"改用临时目录: {temp_dir}, 新保存路径: {save_path}")
+            
+            # 检查临时目录权限
+            if not os.access(temp_dir, os.W_OK):
+                raise PermissionError(f"无法写入任何目录: {save_dir}, {temp_dir}")
         
         # 创建临时文件名，用于部分下载
         temp_file_path = f"{save_path}.part"
+        logger.info(f"将使用临时文件: {temp_file_path}")
         
         # 获取断点续传位置（如果有）
         resume_offset = getattr(task.file_info, "resume_offset", 0)
@@ -782,131 +825,172 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         
         logger.info(f"正在接收文件数据到临时文件: {temp_file_path}，从位置 {bytes_received} 开始")
         
-        with open(temp_file_path, file_mode) as f:
-            # 如果是追加模式，确保文件指针在正确位置
-            if file_mode == 'ab':
-                f.seek(0, 2)  # 移动到文件末尾
-            
-            # 接收数据块直到文件接收完成
-            while bytes_received < expected_size:
-                # 检查当前的套接字是否有效
-                try:
-                    # 如果套接字无效，抛出异常
-                    if not client_sock:
-                        raise ConnectionError("套接字为空")
-                    
-                    # 设置30秒超时并检查套接字状态
-                    client_sock.settimeout(30)
-                    client_sock.getpeername()  # 如果套接字已关闭会抛出异常
-                except (OSError, AttributeError) as e:
-                    # 套接字无效，需要重试
-                    logger.warning(f"连接中断: {e}")
-                    
-                    # 如果超过最大重试次数，则放弃
-                    if retry_count >= max_retries:
-                        logger.error(f"重试次数已达上限 ({max_retries})，接收失败")
-                        raise ConnectionError(f"重试次数已用尽：{e}")
-                    
-                    # 保存当前进度并尝试重新开始
-                    logger.info(f"等待文件传输恢复，已接收 {bytes_received}/{expected_size} 字节")
-                    retry_count += 1
-                    
-                    # 等待一段时间，由发送端重新连接
-                    time.sleep(3)
-                    continue
+        # 打开文件进行写入
+        try:
+            with open(temp_file_path, file_mode) as f:
+                # 如果是追加模式，确保文件指针在正确位置
+                if file_mode == 'ab':
+                    f.seek(0, 2)  # 移动到文件末尾
                 
-                try:
-                    # 接收数据块头部(数据块大小)
-                    header = recv_all(client_sock, 4)
-                    if not header or len(header) < 4:
-                        logger.error(f"接收文件头错误，收到: {header}")
-                        if retry_count >= max_retries:
-                            raise ConnectionError("接收文件头错误")
+                # 接收数据块直到文件接收完成
+                while bytes_received < expected_size:
+                    # 检查当前的套接字是否有效
+                    try:
+                        # 如果套接字无效，抛出异常
+                        if not client_sock:
+                            raise ConnectionError("套接字为空")
                         
+                        # 设置30秒超时并检查套接字状态
+                        client_sock.settimeout(30)
+                        client_sock.getpeername()  # 如果套接字已关闭会抛出异常
+                    except (OSError, AttributeError) as e:
+                        # 套接字无效，需要重试
+                        logger.warning(f"连接中断: {e}")
+                        
+                        # 如果超过最大重试次数，则放弃
+                        if retry_count >= max_retries:
+                            logger.error(f"重试次数已达上限 ({max_retries})，接收失败")
+                            raise ConnectionError(f"重试次数已用尽：{e}")
+                        
+                        # 保存当前进度并尝试重新开始
+                        logger.info(f"等待文件传输恢复，已接收 {bytes_received}/{expected_size} 字节")
                         retry_count += 1
-                        time.sleep(2)
+                        
+                        # 等待一段时间，由发送端重新连接
+                        time.sleep(3)
                         continue
                     
-                    # 解析数据块大小
-                    chunk_size = struct.unpack("!I", header)[0]
-                    logger.debug(f"接收数据块，大小: {chunk_size} 字节")
-                    
-                    # 接收数据块
-                    if chunk_size > 0:
-                        chunk = recv_all(client_sock, chunk_size)
-                        if not chunk or len(chunk) < chunk_size:
-                            logger.error(f"接收数据块错误，预期大小: {chunk_size}，实际大小: {len(chunk) if chunk else 0}")
+                    try:
+                        # 接收数据块头部(数据块大小)
+                        header = recv_all(client_sock, 4)
+                        if not header or len(header) < 4:
+                            logger.error(f"接收文件头错误，收到: {header}")
                             if retry_count >= max_retries:
-                                raise ConnectionError("接收数据块错误")
+                                raise ConnectionError("接收文件头错误")
                             
                             retry_count += 1
                             time.sleep(2)
                             continue
                         
-                        # 重置重试计数器，因为接收成功
-                        retry_count = 0
+                        # 解析数据块大小
+                        chunk_size = struct.unpack("!I", header)[0]
+                        logger.debug(f"接收数据块，大小: {chunk_size} 字节")
                         
-                        # 写入文件
-                        f.write(chunk)
-                        bytes_received += len(chunk)
+                        # 接收数据块
+                        if chunk_size > 0:
+                            chunk = recv_all(client_sock, chunk_size)
+                            if not chunk or len(chunk) < chunk_size:
+                                logger.error(f"接收数据块错误，预期大小: {chunk_size}，实际大小: {len(chunk) if chunk else 0}")
+                                if retry_count >= max_retries:
+                                    raise ConnectionError("接收数据块错误")
+                                
+                                retry_count += 1
+                                time.sleep(2)
+                                continue
+                            
+                            # 重置重试计数器，因为接收成功
+                            retry_count = 0
+                            
+                            # 写入文件
+                            f.write(chunk)
+                            # 确保数据写入磁盘
+                            f.flush()
+                            os.fsync(f.fileno())
+                            
+                            bytes_received += len(chunk)
+                            
+                            # 更新进度
+                            current_time = time.time()
+                            if current_time - last_progress_update >= progress_update_interval:
+                                task.update_progress(bytes_received)
+                                last_progress_update = current_time
+                                logger.debug(f"文件传输进度: {task.progress:.2f}%，已接收: {bytes_received}/{expected_size} 字节")
+                        else:
+                            logger.warning("收到零大小数据块，跳过")
+                            
+                    except socket.timeout:
+                        logger.warning("接收数据超时，尝试等待重新连接")
+                        if retry_count >= max_retries:
+                            logger.error("接收数据超时次数过多，放弃接收")
+                            raise ConnectionError("接收数据超时")
                         
-                        # 更新进度
-                        current_time = time.time()
-                        if current_time - last_progress_update >= progress_update_interval:
-                            task.update_progress(bytes_received)
-                            last_progress_update = current_time
-                            logger.debug(f"文件传输进度: {task.progress:.2f}%，已接收: {bytes_received}/{expected_size} 字节")
-                    else:
-                        logger.warning("收到零大小数据块，跳过")
+                        retry_count += 1
+                        time.sleep(2)
+                        continue
+                    except Exception as e:
+                        logger.error(f"接收数据出错: {e}")
+                        if retry_count >= max_retries:
+                            raise
                         
-                except socket.timeout:
-                    logger.warning("接收数据超时，尝试等待重新连接")
-                    if retry_count >= max_retries:
-                        logger.error("接收数据超时次数过多，放弃接收")
-                        raise ConnectionError("接收数据超时")
-                    
-                    retry_count += 1
-                    time.sleep(2)
-                    continue
-                except Exception as e:
-                    logger.error(f"接收数据出错: {e}")
-                    if retry_count >= max_retries:
-                        raise
-                    
-                    retry_count += 1
-                    time.sleep(2)
-                    continue
-            
-            # 最后一次进度更新，确保显示100%
-            task.update_progress(bytes_received)
-            logger.info(f"文件接收完成: {task.file_info.file_name}，大小: {bytes_received} 字节")
+                        retry_count += 1
+                        time.sleep(2)
+                        continue
+                
+                # 最后一次进度更新，确保显示100%
+                task.update_progress(bytes_received)
+                logger.info(f"文件接收完成: {task.file_info.file_name}，大小: {bytes_received} 字节")
+        except PermissionError as e:
+            logger.error(f"无权限写入文件: {temp_file_path}, 错误: {e}")
+            raise
+        except IOError as e:
+            logger.error(f"文件I/O错误: {temp_file_path}, 错误: {e}")
+            raise
         
         # 验证接收到的数据大小
         if bytes_received != expected_size:
             logger.error(f"文件大小不匹配: 预期 {expected_size}，实际接收 {bytes_received}")
             task.status = "failed"
             task.error_message = "文件大小不匹配"
-            os.remove(temp_file_path)  # 删除不完整文件
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)  # 删除不完整文件
             return
         
         # 验证文件哈希(如果有)
         if task.file_info.file_hash:
-            with open(temp_file_path, 'rb') as f:
-                file_hash = compute_file_hash(f)
-                if file_hash != task.file_info.file_hash:
-                    logger.error(f"文件哈希不匹配: 预期 {task.file_info.file_hash}，计算得到 {file_hash}")
-                    task.status = "failed"
-                    task.error_message = "文件哈希不匹配"
-                    os.remove(temp_file_path)  # 删除不完整文件
-                    return
+            try:
+                with open(temp_file_path, 'rb') as f:
+                    file_hash = compute_file_hash(f)
+                    if file_hash != task.file_info.file_hash:
+                        logger.error(f"文件哈希不匹配: 预期 {task.file_info.file_hash}，计算得到 {file_hash}")
+                        task.status = "failed"
+                        task.error_message = "文件哈希不匹配"
+                        os.remove(temp_file_path)  # 删除不完整文件
+                        return
+            except Exception as e:
+                logger.error(f"计算文件哈希值出错: {e}")
+                # 继续处理，不因哈希计算失败而中断
         
         # 将临时文件重命名为最终文件名
         try:
             # 确保目标文件不存在
             if os.path.exists(save_path):
-                os.remove(save_path)
+                try:
+                    os.remove(save_path)
+                    logger.info(f"已删除现有的目标文件: {save_path}")
+                except Exception as e:
+                    logger.error(f"删除现有文件失败: {e}")
+                    # 尝试使用另一个文件名
+                    base_name, extension = os.path.splitext(save_path)
+                    save_path = f"{base_name}_{int(time.time())}{extension}"
+                    task.file_info.save_path = save_path
+                    logger.info(f"将使用新的文件名: {save_path}")
+            
+            # 重命名文件
             os.rename(temp_file_path, save_path)
             logger.info(f"已将临时文件重命名为最终文件: {save_path}")
+            
+            # 验证文件是否确实存在
+            if not os.path.exists(save_path):
+                logger.error(f"重命名后的文件不存在: {save_path}")
+                raise FileNotFoundError(f"重命名后的文件不存在: {save_path}")
+            
+            # 检查文件大小
+            final_size = os.path.getsize(save_path)
+            if final_size != expected_size:
+                logger.error(f"最终文件大小不匹配: 预期 {expected_size}，实际 {final_size}")
+                # 继续处理，不因大小不匹配而失败
+            else:
+                logger.info(f"最终文件大小正确: {final_size} 字节")
         except Exception as e:
             logger.error(f"重命名文件失败: {e}")
             task.status = "failed"
@@ -918,7 +1002,7 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         task.file_info.status = "completed"
         # 确保进度显示为100%
         task.update_progress(expected_size)
-        logger.info(f"文件接收任务完成: {task.transfer_id}, 文件: {task.file_info.file_name}")
+        logger.info(f"文件接收任务完成: {task.transfer_id}, 文件: {task.file_info.file_name}, 保存在: {save_path}")
         
         # 发送完成确认消息
         try:
@@ -951,10 +1035,11 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
             logger.debug(f"关闭套接字时出错: {e}")
         
         # 如果任务失败且临时文件仍存在，删除它
-        if save_path and task.status == "failed" and os.path.exists(f"{save_path}.part"):
+        if (task.status == "failed" and temp_file_path and 
+                os.path.exists(temp_file_path)):
             try:
-                os.remove(f"{save_path}.part")
-                logger.info(f"已删除不完整的临时文件: {save_path}.part")
+                os.remove(temp_file_path)
+                logger.info(f"已删除不完整的临时文件: {temp_file_path}")
             except Exception as e:
                 logger.error(f"删除临时文件失败: {e}")
         
