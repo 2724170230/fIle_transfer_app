@@ -403,28 +403,12 @@ class SendNowApp(MainWindow):
         # 更新接收面板状态
         self.receivePanel.statusPanel.showCompleted(filename)
         
-        # 安全断开可能存在的旧连接
-        try:
-            self.receivePanel.statusPanel.openFileButton.clicked.disconnect()
-        except TypeError:
-            # 如果没有连接，忽略错误
-            pass
+        # 显示成功消息
+        msg_box = create_message_box(self, QMessageBox.Information, "接收成功", f"文件 {filename} 已成功接收!\n保存在: {path}")
+        msg_box.exec_()
         
-        try:
-            self.receivePanel.statusPanel.openFolderButton.clicked.disconnect()
-        except TypeError:
-            # 如果没有连接，忽略错误
-            pass
-        
-        # 连接新的动作
-        self.receivePanel.statusPanel.openFileButton.clicked.connect(
-            lambda: os.startfile(path) if os.name == 'nt' else os.system(f"open '{path}'")
-        )
-        
-        folder_path = os.path.dirname(path)
-        self.receivePanel.statusPanel.openFolderButton.clicked.connect(
-            lambda: os.startfile(folder_path) if os.name == 'nt' else os.system(f"open '{folder_path}'")
-        )
+        # 延迟2秒后隐藏进度条
+        QTimer.singleShot(2000, self.receivePanel.statusPanel.reset)
     
     def on_server_transfer_failed(self, filename, error):
         """处理服务器传输失败事件"""
@@ -432,11 +416,14 @@ class SendNowApp(MainWindow):
         
         # 更新接收面板状态
         self.receivePanel.statusPanel.statusLabel.setText(f"接收失败: {error}")
-        self.receivePanel.statusPanel.actionsWidget.setVisible(False)
+        self.receivePanel.statusPanel.progressBar.setValue(0)
         
         # 显示错误提示
         msg_box = create_message_box(self, QMessageBox.Warning, "接收失败", f"文件 {filename} 接收失败:\n{error}")
         msg_box.exec_()
+        
+        # 延迟重置状态面板（3秒后）
+        QTimer.singleShot(3000, self.receivePanel.statusPanel.reset)
     
     # ===== 发送客户端事件处理 =====
     
@@ -472,7 +459,7 @@ class SendNowApp(MainWindow):
         """处理客户端传输完成事件"""
         logger.info(f"文件发送完成: {filename} - {response}")
         
-        # 更新状态面板显示完成（使用的是SendStatusPanel，没有打开文件按钮）
+        # 更新状态面板显示完成
         self.sendPanel.statusPanel.showCompleted(filename)
         
         # 重置发送按钮

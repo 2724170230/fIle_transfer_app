@@ -553,38 +553,10 @@ class StatusPanel(QWidget):
             }}
         """)
         
-        # 传输完成操作按钮（初始隐藏）
-        self.actionsWidget = QWidget()
-        actionsLayout = QHBoxLayout(self.actionsWidget)
-        
-        self.openFolderButton = QPushButton("打开所在文件夹")
-        self.openFileButton = QPushButton("打开文件")
-        
-        for btn in [self.openFolderButton, self.openFileButton]:
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {BUTTON_BG};
-                    color: {TEXT_COLOR};
-                    border: none;
-                    padding: 8px 15px;
-                    border-radius: 4px;
-                }}
-                QPushButton:hover {{
-                    background-color: {BUTTON_HOVER};
-                }}
-                QPushButton:pressed {{
-                    background-color: {QColor(BUTTON_BG).darker(110).name()};
-                }}
-            """)
-            actionsLayout.addWidget(btn)
-        
-        self.actionsWidget.setVisible(False)
-        
         # 添加到主布局
         layout.addStretch()
         layout.addWidget(self.statusLabel)
         layout.addWidget(self.progressBar)
-        layout.addWidget(self.actionsWidget)
         layout.addStretch()
         
         # 初始隐藏状态文本和进度条
@@ -595,7 +567,6 @@ class StatusPanel(QWidget):
         """显示进度条和状态"""
         self.statusLabel.setVisible(True)
         self.progressBar.setVisible(True)
-        self.actionsWidget.setVisible(False)
         
         if file_name:
             self.statusLabel.setText(f"正在接收文件：{file_name}")
@@ -604,13 +575,11 @@ class StatusPanel(QWidget):
         """显示传输完成状态"""
         self.statusLabel.setText(f"已接收：{file_name}")
         self.progressBar.setValue(100)
-        self.actionsWidget.setVisible(True)
     
     def reset(self):
         """重置状态面板"""
         self.statusLabel.setVisible(False)
         self.progressBar.setVisible(False)
-        self.actionsWidget.setVisible(False)
         self.progressBar.setValue(0)
 
 class DeviceSearchWidget(QWidget):
@@ -1011,7 +980,7 @@ class SendPanel(QWidget):
         
         # ===== 中间区域：状态面板 =====
         # 添加状态面板用于显示发送进度
-        self.statusPanel = SendStatusPanel()
+        self.statusPanel = StatusPanel()
         # 初始时隐藏状态面板中的元素
         self.statusPanel.reset()
         
@@ -1514,26 +1483,6 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentWidget(self.sendPanel)
         elif button == self.settingsButton:
             self.stack.setCurrentWidget(self.settingsPanel)
-
-class SendStatusPanel(StatusPanel):
-    """传输状态面板 - 不带文件打开按钮的版本，专用于发送端"""
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        
-        # 移除操作按钮容器
-        if hasattr(self, 'actionsWidget'):
-            self.actionsWidget.setVisible(False)
-            self.actionsWidget.deleteLater()
-            self.actionsWidget = None
-    
-    def showCompleted(self, file_name):
-        """显示传输完成状态 - 覆盖父类方法，不显示操作按钮"""
-        self.statusLabel.setText(f"已发送：{file_name}")
-        self.progressBar.setValue(100)
-        # 不显示操作按钮
-        if hasattr(self, 'actionsWidget') and self.actionsWidget:
-            self.actionsWidget.setVisible(False)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
