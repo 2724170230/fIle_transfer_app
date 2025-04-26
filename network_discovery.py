@@ -69,7 +69,7 @@ class NetworkDiscovery(QObject):
         # 网络参数
         self.broadcast_interval = 5.0  # 广播间隔(秒)
         self.socket_timeout = 0.5      # 套接字接收超时
-        self.device_timeout = 30.0     # 设备超时时间(秒)
+        self.device_timeout = 60.0     # 设备超时时间(秒)，从30秒增加到60秒，减少网络波动影响
         
         # 线程
         self.discovery_thread = None
@@ -244,6 +244,11 @@ class NetworkDiscovery(QObject):
             # 仅对新设备触发发现信号
             if is_new_device:
                 logger.info(f"发现新设备: {device_name} ({device_id}) - {device_ip}")
+                self.deviceDiscovered.emit(device)
+            else:
+                # 增加此处逻辑：即使不是新设备，也更新lastSeen并发送设备刷新信号
+                logger.debug(f"更新设备: {device_name} ({device_id}) - {device_ip}")
+                # 发出刷新信号，让UI更新设备列表
                 self.deviceDiscovered.emit(device)
         
         except json.JSONDecodeError:

@@ -340,8 +340,10 @@ class SendNowApp(MainWindow):
         if "正在搜索" in status:
             self.sendPanel.searchStatusLabel.setText("正在搜索附近设备...")
         else:
+            # 确保读取的设备数量是准确的
             device_count = self.sendPanel.deviceList.count()
             self.sendPanel.searchStatusLabel.setText(f"找到 {device_count} 个设备")
+            logger.debug(f"UI更新设备数量: {device_count}")
     
     # ===== 接收服务器事件处理 =====
     
