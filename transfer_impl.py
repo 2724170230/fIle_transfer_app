@@ -805,6 +805,9 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
                     last_successful_offset = bytes_sent
                     bytes_sent += len(chunk)
                     task.update_progress(bytes_sent)
+                    
+                    # 发送数据块后
+                    logger.debug(f"已发送数据块: {len(chunk)} 字节, 总进度: {bytes_sent}/{file_size}")
                 except (socket.error, BrokenPipeError) as e:
                     logger.error(f"发送数据时套接字错误: {e}")
                     if retry_count >= max_retries:
@@ -1128,6 +1131,9 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                                 task.update_progress(bytes_received)
                                 last_progress_update = current_time
                                 logger.debug(f"文件传输进度: {progress_percent:.2f}%，已接收: {bytes_received}/{expected_size} 字节")
+                            
+                            # 接收数据块后
+                            logger.debug(f"已接收数据块: {len(chunk)} 字节, 总进度: {bytes_received}/{expected_size}")
                         else:
                             logger.warning("收到零大小数据块，跳过")
                             
