@@ -1083,7 +1083,8 @@ class SendPanel(QWidget):
         
         # ===== 发送状态面板 =====
         self.statusPanel = StatusPanel()
-        self.statusPanel.setVisible(False)  # 初始隐藏状态面板
+        # 不再设置为不可见，而是保持可见并隐藏内容
+        self.statusPanel.hideContent()
         
         # ===== 底部区域：附近设备 =====
         
