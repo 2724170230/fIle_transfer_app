@@ -483,8 +483,8 @@ class SendNowApp(MainWindow):
         msg_box = create_message_box(self, QMessageBox.Information, "发送成功", f"文件 {filename} 已成功发送!")
         msg_box.exec_()
         
-        # 延迟重置状态面板（3秒后）
-        QTimer.singleShot(3000, self.sendPanel.statusPanel.reset)
+        # 延迟2秒后隐藏进度条
+        QTimer.singleShot(2000, self.sendPanel.statusPanel.reset)
     
     def on_client_transfer_failed(self, filename, error):
         """处理客户端传输失败事件"""
