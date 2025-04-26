@@ -40,7 +40,7 @@ class DeviceInfo:
         }
     
     def is_expired(self, timeout=60):
-        """检查设备是否超时（60秒未收到广播）"""
+        """检查设备是否超时（默认60秒未收到广播）"""
         return (time.time() - self.last_seen) > timeout
     
     def __eq__(self, other):
@@ -148,17 +148,21 @@ class NetworkDiscovery(QObject):
             # 获取所有网络接口的广播地址
             broadcast_addresses = self._get_broadcast_addresses()
             
-            # 广播离线消息到所有网络接口，重复发送3次以确保可靠接收
+            # 广播离线消息到所有网络接口，重复发送5次以确保可靠接收
             logger.info(f"发送设备离线广播: {self.device_name} ({self.device_id})")
             data = json.dumps(message).encode('utf-8')
             
-            for _ in range(3):  # 发送3次以增加可靠性
+            # 使用255.255.255.255通用广播地址确保覆盖所有网络
+            broadcast_addresses.add('255.255.255.255')
+            
+            for i in range(5):  # 发送5次以增加可靠性
                 for broadcast_address in broadcast_addresses:
                     try:
                         sock.sendto(data, (broadcast_address, self.discovery_port))
                     except Exception as e:
                         logger.error(f"发送离线广播到 {broadcast_address} 时出错: {str(e)}")
-                time.sleep(0.1)  # 间隔100毫秒
+                # 增加发送之间的间隔，避免网络拥塞导致丢包
+                time.sleep(0.05)  # 减少到50毫秒
                 
         except Exception as e:
             logger.error(f"广播离线消息时出错: {str(e)}")
