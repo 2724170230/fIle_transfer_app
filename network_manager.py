@@ -3,13 +3,25 @@ import threading
 import json
 import os
 import time
+from PyQt5.QtCore import QObject, pyqtSignal
 
-class NetworkManager:
+class NetworkManager(QObject):
+    # 定义信号
+    progress_updated = pyqtSignal(str, int)  # 文件名, 进度
+    file_received = pyqtSignal(str)  # 文件路径
+
     def __init__(self, receive_callback=None, progress_callback=None):
+        super().__init__()
         self.server_socket = None
-        self.receive_callback = receive_callback  # 接收完成回调
-        self.progress_callback = progress_callback  # 进度回调
+        self.receive_callback = receive_callback
+        self.progress_callback = progress_callback
         self.running = False
+        
+        # 连接信号到回调
+        if self.progress_callback:
+            self.progress_updated.connect(self.progress_callback)
+        if self.receive_callback:
+            self.file_received.connect(self.receive_callback)
     
     def start_server(self, host='0.0.0.0', port=9999):
         """启动接收服务器"""
@@ -57,7 +69,7 @@ class NetworkManager:
             
             # 通知UI开始接收文件
             if self.progress_callback:
-                self.progress_callback(filename, 0)
+                self.progress_updated.emit(filename, 0)
             
             # 确定保存路径
             save_path = os.path.join(os.path.expanduser("~/Downloads"), filename)
@@ -82,11 +94,11 @@ class NetworkManager:
                     # 更新进度
                     progress = int(bytes_received * 100 / filesize)
                     if self.progress_callback:
-                        self.progress_callback(filename, progress)
+                        self.progress_updated.emit(filename, progress)
             
             # 完成接收
             if self.receive_callback:
-                self.receive_callback(save_path)
+                self.file_received.emit(save_path)
                 
             print(f"文件 {filename} 接收完成，保存至 {save_path}")
         
@@ -133,7 +145,7 @@ class NetworkManager:
                     # 更新进度
                     progress = int(bytes_sent * 100 / filesize)
                     if self.progress_callback:
-                        self.progress_callback(filename, progress)
+                        self.progress_updated.emit(filename, progress)
             
             # 关闭连接
             client.close()

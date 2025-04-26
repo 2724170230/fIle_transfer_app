@@ -1,85 +1,97 @@
 import sys
 import os
-from PyQt5.QtWidgets import QApplication
-from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QApplication, QMainWindow
+from PyQt5.QtCore import Qt, QThread
 
 from localsend_ui_design import MainWindow
 from network_manager import NetworkManager
 from device_discovery import DeviceDiscovery
 
-class App:
+class SendNowApp(QMainWindow):
     def __init__(self):
-        self.app = QApplication(sys.argv)
-        self.window = MainWindow()
+        super().__init__()
+        self.ui = MainWindow()
+        self.ui.setupUi(self)
         
         # 初始化网络管理器
         self.network_manager = NetworkManager(
-            receive_callback=self.file_received,
+            receive_callback=self.on_file_received,
             progress_callback=self.update_progress
         )
         
         # 初始化设备发现
-        self.device_discovery = DeviceDiscovery(
-            device_found_callback=self.device_found
-        )
+        self.device_discovery = DeviceDiscovery()
         
-        # 设置设备信息
-        device_name, device_id = self.window.receivePanel.device_name, self.window.receivePanel.device_id
-        self.device_discovery.set_device_info(device_name, device_id)
+        # 启动服务器
+        self.start_server()
         
-        # 将网络管理器传递给UI组件
-        self.window.sendPanel.set_network_manager(self.network_manager)
-        self.window.receivePanel.set_network_manager(self.network_manager)
+        # 连接信号和槽
+        self.ui.sendButton.clicked.connect(self.send_file)
+        self.ui.refreshButton.clicked.connect(self.refresh_devices)
         
-        # 连接UI信号到功能
-        self.connect_signals()
-        
-        # 创建必要的目录
-        self.create_directories()
-        
-        # 启动服务
-        self.start_services()
-    
-    def create_directories(self):
-        """创建必要的目录"""
-        # 创建icons目录
-        os.makedirs("icons", exist_ok=True)
-        
-        # 创建默认下载目录
-        os.makedirs(os.path.expanduser("~/Downloads"), exist_ok=True)
-    
-    def connect_signals(self):
-        """连接UI信号到功能"""
-        # 连接发送按钮
-        self.window.sendPanel.sendButton.clicked.connect(
-            self.window.sendPanel.sendFileToDevice
-        )
-        
-    def start_services(self):
-        """启动服务"""
-        # 启动设备发现
-        self.device_discovery.start_discovery()
-    
-    def file_received(self, file_path):
-        """文件接收完成回调"""
-        self.window.receivePanel.fileReceived(file_path)
+    def start_server(self):
+        """在后台线程启动服务器"""
+        self.server_thread = QThread()
+        self.network_manager.moveToThread(self.server_thread)
+        self.server_thread.started.connect(lambda: self.network_manager.start_server())
+        self.server_thread.start()
     
     def update_progress(self, filename, progress):
-        """更新传输进度回调"""
-        # 根据当前显示的面板决定通知哪个
-        if self.window.stack.currentWidget() == self.window.receivePanel:
-            self.window.receivePanel.updateProgress(filename, progress)
+        """更新进度条"""
+        self.ui.progressBar.setValue(progress)
+        self.ui.statusLabel.setText(f"正在传输: {filename} ({progress}%)")
     
-    def device_found(self, device):
-        """发现新设备回调"""
-        # 更新设备列表
-        self.window.sendPanel.add_device_to_list(device)
+    def on_file_received(self, filepath):
+        """文件接收完成的回调"""
+        self.ui.progressBar.setValue(100)
+        self.ui.statusLabel.setText(f"文件已保存至: {filepath}")
     
-    def run(self):
-        """运行应用程序"""
-        self.window.show()
-        return self.app.exec_()
+    def send_file(self):
+        """发送文件"""
+        selected_device = self.ui.deviceList.currentItem()
+        if not selected_device:
+            self.ui.statusLabel.setText("请先选择接收设备")
+            return
+            
+        device_info = selected_device.data(Qt.UserRole)
+        if not device_info:
+            return
+            
+        # 在新线程中发送文件
+        self.sender_thread = QThread()
+        self.network_manager.moveToThread(self.sender_thread)
+        self.sender_thread.started.connect(
+            lambda: self.network_manager.send_file(
+                device_info['ip'],
+                self.ui.filePathEdit.text()
+            )
+        )
+        self.sender_thread.start()
+    
+    def refresh_devices(self):
+        """刷新设备列表"""
+        self.ui.deviceList.clear()
+        self.ui.statusLabel.setText("正在搜索设备...")
+        
+        # 在新线程中搜索设备
+        self.discovery_thread = QThread()
+        self.device_discovery.moveToThread(self.discovery_thread)
+        self.discovery_thread.started.connect(self.device_discovery.discover)
+        self.device_discovery.device_found.connect(self.add_device_to_list)
+        self.discovery_thread.start()
+    
+    def add_device_to_list(self, device_info):
+        """添加设备到列表"""
+        from PyQt5.QtWidgets import QListWidgetItem
+        item = QListWidgetItem(f"{device_info['name']} ({device_info['ip']})")
+        item.setData(Qt.UserRole, device_info)
+        self.ui.deviceList.addItem(item)
 
-if __name__ == "__main__":
-    app = App()
-    sys.exit(app.run()) 
+def main():
+    app = QApplication(sys.argv)
+    window = SendNowApp()
+    window.show()
+    sys.exit(app.exec_())
+
+if __name__ == '__main__':
+    main() 

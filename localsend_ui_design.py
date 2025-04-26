@@ -615,58 +615,34 @@ class DeviceSearchWidget(QWidget):
         self.searchLabel.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 16px;")
         
         # 创建动画指示器
-        self.animationWidget = QWidget()
+        self.animationWidget = AnimationWidget(self)
         self.animationWidget.setFixedSize(40, 40)
-        self.animationWidget.setStyleSheet("background-color: transparent;")
         
         # 添加到布局
         layout.addWidget(self.animationWidget, 0, Qt.AlignCenter)
         layout.addWidget(self.searchLabel)
         
-        # 设置计时器更新动画
-        self.angle = 0
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.updateAnimation)
-        self.timer.start(50)  # 每50毫秒更新一次
-        
         # 设置样式
         self.setMinimumHeight(80)
-        self.setStyleSheet("background-color: #35353A; border-radius: 8px;")
+        self.setStyleSheet(f"""
+            background-color: {PANEL_BG};
+            border-radius: 8px;
+        """)
     
     def paintEvent(self, event):
         """绘制背景"""
-        super().paintEvent(event)
-        
-        # 绘制背景
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
         # 创建渐变
         gradient = QLinearGradient(0, 0, self.width(), 0)
-        gradient.setColorAt(0, QColor("#35353A"))
-        gradient.setColorAt(1, QColor("#3A3A40"))
+        gradient.setColorAt(0, QColor(PANEL_BG))
+        gradient.setColorAt(1, QColor(INNER_BG))
         
         # 填充背景
-        painter.fillRect(self.rect(), QBrush(gradient))
-    
-    def updateAnimation(self):
-        """更新动画状态"""
-        self.angle = (self.angle + 10) % 360
-        self.animationWidget.update()
-    
-    def paintEvent(self, event):
-        """绘制组件"""
-        super().paintEvent(event)
-    
-    def resizeEvent(self, event):
-        """调整大小时居中动画组件"""
-        super().resizeEvent(event)
-        
-        # 居中动画组件
-        self.animationWidget.move(
-            (self.width() - self.animationWidget.width()) // 2,
-            10
-        )
+        path = QPainterPath()
+        path.addRoundedRect(self.rect(), 8, 8)
+        painter.fillPath(path, gradient)
 
 class AnimationWidget(QWidget):
     """旋转动画组件"""
@@ -824,8 +800,7 @@ class ReceivePanel(QWidget):
         contentWidget.setStyleSheet(f"""
             background-color: {PANEL_BG};
             border-radius: 12px;
-            border: none;
-            box-shadow: 0px 3px 10px rgba(0, 0, 0, 0.2);
+            border: 1px solid {BORDER_COLOR};
         """)
         
         # 添加到主布局
@@ -1066,8 +1041,7 @@ class SendPanel(QWidget):
         topAreaWidget.setStyleSheet(f"""
             background-color: {PANEL_BG};
             border-radius: 8px;
-            border: none;
-            box-shadow: 0px 2px 8px rgba(0, 0, 0, 0.15);
+            border: 1px solid {BORDER_COLOR};
         """)
         
         # ===== 底部区域：附近设备 =====
@@ -1178,8 +1152,7 @@ class SendPanel(QWidget):
         self.deviceSearchWidget.setStyleSheet(f"""
             background-color: {PANEL_BG};
             border-radius: 8px;
-            border: none;
-            box-shadow: 0px 2px 8px rgba(0, 0, 0, 0.15);
+            border: 1px solid {BORDER_COLOR};
         """)
         
         # 添加到主布局
@@ -1494,8 +1467,7 @@ class SettingsPanel(QWidget):
         contentWidget.setStyleSheet(f"""
             background-color: {PANEL_BG};
             border-radius: 12px;
-            border: none;
-            box-shadow: 0px 3px 10px rgba(0, 0, 0, 0.2);
+            border: 1px solid {BORDER_COLOR};
         """)
         
         # 添加到主布局
