@@ -11,6 +11,9 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt5.QtCore import Qt, QSize, pyqtSignal, QMimeData, QUrl, QTimer, QRect, QPoint, QPointF, QPropertyAnimation
 from PyQt5.QtGui import QIcon, QColor, QPalette, QFont, QDrag, QPainter, QPen, QBrush, QPainterPath, QRadialGradient, QLinearGradient, QTransform
 
+# PyQt中QWIDGETSIZE_MAX的值
+QWIDGETSIZE_MAX = 16777215
+
 # 更高对比度的赛博朋克风格色调
 DARK_BG = "#10111E"        # 更深的导航栏背景色
 MAIN_BG = "#151829"        # 更深的主界面背景
@@ -620,7 +623,8 @@ class StatusPanel(QWidget):
         self.fadeAnimation.setDuration(500)  # 500毫秒的淡出时间
         self.fadeAnimation.setStartValue(1.0)
         self.fadeAnimation.setEndValue(0.0)
-        self.fadeAnimation.finished.connect(self.reset)
+        # 不再直接连接到reset方法，让ReceivePanel来处理
+        # self.fadeAnimation.finished.connect(self.reset)
     
     def showProgress(self, file_name=None, mode="receive"):
         """显示进度条和状态
@@ -656,19 +660,26 @@ class StatusPanel(QWidget):
         # 只在接收模式下显示完成按钮
         if mode == "receive":
             self.completeButton.setVisible(True)
-    
+        
     def fadeOutPanel(self):
         """淡出面板的动画效果"""
         self.fadeAnimation.start()
+        # 由ReceivePanel的resetLayout方法处理重置
     
     def reset(self):
         """重置状态面板"""
+        # 隐藏所有控件
         self.statusLabel.setVisible(False)
         self.progressBar.setVisible(False)
         self.actionsWidget.setVisible(False)
         self.completeButton.setVisible(False)
+        
+        # 重置进度条值
         self.progressBar.setValue(0)
+        
+        # 隐藏面板自身
         self.setVisible(False)
+        
         # 重置透明度为1.0，为下次显示做准备
         self.setWindowOpacity(1.0)
 
@@ -881,6 +892,8 @@ class ReceivePanel(QWidget):
         
         # 状态面板
         self.statusPanel = StatusPanel()
+        # 连接状态面板的淡出动画完成信号到布局重置函数
+        self.statusPanel.fadeAnimation.finished.connect(self.resetLayout)
         
         # 添加到内容布局
         contentLayout.addWidget(self.logoWidget, 0, Qt.AlignCenter)
@@ -914,6 +927,29 @@ class ReceivePanel(QWidget):
         """)
         self.testButton.clicked.connect(self.simulateReceive)
         layout.addWidget(self.testButton, 0, Qt.AlignRight)
+    
+    def resetLayout(self):
+        """重置布局，在状态面板淡出动画结束后调用"""
+        # 重置状态面板
+        self.statusPanel.reset()
+        
+        # 保存当前的几何尺寸
+        parentGeometry = None
+        if self.parentWidget():
+            parentGeometry = self.parentWidget().geometry()
+        
+        # 使用延时器来重置布局，确保界面正确刷新
+        def doReset():
+            # 更新当前布局
+            self.updateGeometry()
+            if self.parentWidget():
+                self.parentWidget().adjustSize()
+                if parentGeometry:
+                    # 恢复到原来的几何尺寸
+                    self.parentWidget().setGeometry(parentGeometry)
+        
+        # 稍微延迟执行重置操作，给Qt布局系统一些处理时间
+        QTimer.singleShot(50, doReset)
     
     def simulateReceive(self):
         """模拟接收文件过程"""
