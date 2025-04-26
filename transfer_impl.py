@@ -376,6 +376,29 @@ def _handle_file_info(self, message: Message, client_sock: socket.socket, client
     # 更新文件信息
     file_info = FileInfo.from_dict(file_data)
     
+    # 检查是否为断点续传请求
+    resume_offset = file_data.get("resume_offset", 0)
+    if resume_offset > 0:
+        logger.info(f"收到断点续传请求，从偏移量 {resume_offset} 开始")
+        
+        # 如果有临时文件，检查它的大小是否与断点位置一致
+        temp_file_path = f"{file_info.save_path}.part"
+        if os.path.exists(temp_file_path):
+            temp_file_size = os.path.getsize(temp_file_path)
+            if temp_file_size == resume_offset:
+                logger.info(f"断点位置匹配，现有临时文件大小: {temp_file_size}，将继续接收")
+            else:
+                logger.warning(f"断点位置不匹配，临时文件大小: {temp_file_size}，请求偏移量: {resume_offset}")
+                # 决定是否删除临时文件重新开始
+                if temp_file_size < resume_offset:
+                    logger.warning("临时文件比请求的偏移量小，将删除并重新接收")
+                    os.remove(temp_file_path)
+                else:
+                    # 临时文件大于偏移量，可以截断
+                    logger.info(f"将临时文件截断至 {resume_offset} 字节")
+                    with open(temp_file_path, 'a+b') as f:
+                        f.truncate(resume_offset)
+    
     # 确保保存路径存在并且有权限写入
     save_dir = self.default_save_dir
     full_save_path = os.path.join(save_dir, file_info.file_name)
@@ -402,6 +425,8 @@ def _handle_file_info(self, message: Message, client_sock: socket.socket, client
     
     # 设置文件保存路径
     file_info.save_path = full_save_path
+    # 保存断点续传位置信息
+    file_info.resume_offset = resume_offset
     task.file_info = file_info
     
     logger.info(f"准备接收文件: {task.file_info.file_name}, 大小: {task.file_info.get_formatted_size()}, 保存到: {task.file_info.save_path}")
@@ -495,6 +520,10 @@ def _handle_network_message(self, message: Message, addr: Tuple[str, int]):
 def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
     """发送文件实现"""
     needs_close = False
+    max_retries = 3
+    retry_count = 0
+    last_successful_offset = 0  # 记录上次成功发送的偏移量，用于断点续传
+    
     try:
         file_info = task.file_info
         device = task.device
@@ -512,40 +541,6 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
         if not file_info.file_hash:
             file_info.calculate_hash()
         
-        # 如果没有提供socket，则创建一个新的连接
-        if not client_sock:
-            logger.debug(f"创建新的套接字连接到 {device.ip_address}:{device.port}")
-            client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client_sock.settimeout(10.0)
-            client_sock.connect((device.ip_address, device.port))
-            needs_close = True
-            
-            # 发送文件信息
-            file_info_message = Message(MessageType.FILE_INFO, {"file_info": file_info.to_dict()})
-            client_sock.sendall(file_info_message.to_bytes())
-            
-            # 等待接收方准备就绪
-            time.sleep(0.5)
-        else:
-            # 检查socket是否有效
-            try:
-                client_sock.getpeername()  # 如果套接字已关闭会抛出异常
-            except Exception as e:
-                logger.warning(f"提供的套接字无效，创建新的连接: {e}")
-                client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                client_sock.settimeout(10.0)
-                client_sock.connect((device.ip_address, device.port))
-                needs_close = True
-                
-                # 发送文件信息
-                file_info_message = Message(MessageType.FILE_INFO, {"file_info": file_info.to_dict()})
-                client_sock.sendall(file_info_message.to_bytes())
-                
-                # 等待接收方准备就绪
-                time.sleep(0.5)
-        
-        task.socket = client_sock
-        
         # 打开文件并发送数据
         file_size = file_info.file_size
         chunk_size = file_info.chunk_size
@@ -557,6 +552,57 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
                 if task.paused:
                     time.sleep(0.1)
                     continue
+                
+                # 如果连接断开，尝试重新连接
+                if client_sock is None or retry_count > 0:
+                    try:
+                        # 如果有旧的套接字，尝试关闭
+                        if client_sock and needs_close:
+                            try:
+                                client_sock.close()
+                            except:
+                                pass
+                        
+                        logger.info(f"创建新的套接字连接到 {device.ip_address}:{device.port} (重试次数: {retry_count})")
+                        client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        client_sock.settimeout(10.0)
+                        client_sock.connect((device.ip_address, device.port))
+                        needs_close = True
+                        
+                        # 发送文件信息，包含断点续传的偏移量
+                        file_info_dict = file_info.to_dict()
+                        file_info_dict["resume_offset"] = bytes_sent  # 添加断点续传信息
+                        file_info_message = Message(MessageType.FILE_INFO, {"file_info": file_info_dict})
+                        client_sock.sendall(file_info_message.to_bytes())
+                        
+                        # 等待接收方准备就绪
+                        time.sleep(0.5)
+                        task.socket = client_sock
+                        logger.info(f"套接字重新连接成功，继续从 {bytes_sent} 字节处发送")
+                    except Exception as conn_error:
+                        logger.error(f"重新连接失败: {conn_error}")
+                        if retry_count >= max_retries:
+                            raise Exception(f"重试次数已达上限 ({max_retries}), 传输失败")
+                        
+                        retry_count += 1
+                        logger.info(f"等待3秒后尝试第 {retry_count} 次重连...")
+                        time.sleep(3)
+                        continue
+                elif client_sock:
+                    # 检查套接字是否仍然有效
+                    try:
+                        client_sock.getpeername()  # 如果套接字已关闭会抛出异常
+                    except Exception as e:
+                        logger.warning(f"套接字已断开，尝试重新连接: {e}")
+                        client_sock = None
+                        retry_count += 1
+                        continue
+                
+                # 重置重试计数器，因为已经成功建立连接
+                retry_count = 0
+                
+                # 定位到文件的当前发送位置
+                f.seek(bytes_sent)
                 
                 # 计算本次发送的大小
                 size_to_send = min(chunk_size, file_size - bytes_sent)
@@ -585,37 +631,54 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
                     
                     # 发送数据
                     client_sock.sendall(chunk)
+                    
+                    # 更新已发送字节数和上次成功位置
+                    last_successful_offset = bytes_sent
+                    bytes_sent += len(chunk)
+                    task.update_progress(bytes_sent)
                 except (socket.error, BrokenPipeError) as e:
                     logger.error(f"发送数据时套接字错误: {e}")
-                    raise
-                
-                # 更新进度
-                bytes_sent += len(chunk)
-                task.update_progress(bytes_sent)
+                    if retry_count >= max_retries:
+                        logger.error(f"重试次数已达上限 ({max_retries})，传输失败")
+                        raise
+                    
+                    # 准备重连
+                    client_sock = None
+                    retry_count += 1
+                    # 回退到最后一个成功的位置
+                    bytes_sent = last_successful_offset
+                    logger.info(f"连接断开，将从偏移量 {bytes_sent} 重试 (第 {retry_count} 次)")
+                    time.sleep(2)  # 等待一会儿再重试
+                    continue
                 
                 # 控制发送速度，避免网络拥堵
                 time.sleep(0.001)
         
         # 发送完成消息
         if not task.cancelled:
-            complete_message = {
-                "transfer_id": transfer_id,
-                "completed": True,
-                "file_hash": file_info.file_hash
-            }
-            message = Message(MessageType.COMPLETE, complete_message)
-            client_sock.sendall(message.to_bytes())
-            
-            # 更新状态
-            task.status = "completed"
-            file_info.status = "completed"
-            task.end_time = time.time()
-            
-            logger.info(f"文件发送完成: {file_info.file_name}, 大小: {file_info.get_formatted_size()}")
-            
-            # 触发完成回调
-            if self.on_transfer_complete:
-                self.on_transfer_complete(file_info, True)
+            try:
+                if client_sock:
+                    complete_message = {
+                        "transfer_id": transfer_id,
+                        "completed": True,
+                        "file_hash": file_info.file_hash
+                    }
+                    message = Message(MessageType.COMPLETE, complete_message)
+                    client_sock.sendall(message.to_bytes())
+                    
+                    # 更新状态
+                    task.status = "completed"
+                    file_info.status = "completed"
+                    task.end_time = time.time()
+                    
+                    logger.info(f"文件发送完成: {file_info.file_name}, 大小: {file_info.get_formatted_size()}")
+                    
+                    # 触发完成回调
+                    if self.on_transfer_complete:
+                        self.on_transfer_complete(file_info, True)
+            except Exception as e:
+                logger.error(f"发送完成消息失败: {e}")
+                raise
     
     except Exception as e:
         logger.error(f"发送文件出错: {e}")
@@ -648,10 +711,18 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
 
 def _receive_file(self, task: TransferTask, client_sock: socket.socket):
     """接收文件内容并保存"""
+    save_path = None
     try:
         # 确认文件信息已设置
         if not task.file_info or not task.file_info.save_path:
-            raise ValueError(f"任务{task.task_id}的文件信息未设置或保存路径无效")
+            raise ValueError(f"任务{task.transfer_id}的文件信息未设置或保存路径无效")
+        
+        # 检查套接字是否有效
+        try:
+            client_sock.getpeername()
+        except Exception as e:
+            logger.error(f"无效的套接字连接: {e}")
+            raise ConnectionError(f"套接字连接无效: {e}")
         
         logger.info(f"开始接收文件: {task.file_info.file_name}, 保存到: {task.file_info.save_path}")
         
@@ -670,18 +741,47 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         # 创建临时文件名，用于部分下载
         temp_file_path = f"{save_path}.part"
         
-        bytes_received = 0
+        # 获取断点续传位置（如果有）
+        resume_offset = getattr(task.file_info, "resume_offset", 0)
+        bytes_received = resume_offset
+        
         expected_size = task.file_info.file_size
         last_progress_update = time.time()
         progress_update_interval = 0.5  # 更新间隔，秒
         
-        logger.info(f"正在接收文件数据到临时文件: {temp_file_path}")
+        # 检查临时文件是否存在，以及大小是否正确
+        file_mode = 'wb'  # 默认为写入模式
+        if resume_offset > 0 and os.path.exists(temp_file_path):
+            temp_file_size = os.path.getsize(temp_file_path)
+            if temp_file_size == resume_offset:
+                logger.info(f"发现有效的临时文件，从偏移量 {resume_offset} 继续接收")
+                file_mode = 'ab'  # 追加模式
+            else:
+                logger.warning(f"临时文件大小 ({temp_file_size}) 与断点位置 ({resume_offset}) 不匹配，将重新接收")
+                # 默认使用写入模式
+        elif resume_offset > 0:
+            logger.warning(f"请求从偏移量 {resume_offset} 继续接收，但临时文件不存在，将重新接收")
+            # 重置断点位置
+            bytes_received = 0
+            resume_offset = 0
         
-        with open(temp_file_path, 'wb') as f:
+        logger.info(f"正在接收文件数据到临时文件: {temp_file_path}，从位置 {bytes_received} 开始")
+        
+        with open(temp_file_path, file_mode) as f:
+            # 如果是追加模式，确保文件指针在正确位置
+            if file_mode == 'ab':
+                f.seek(0, 2)  # 移动到文件末尾
+            
             # 接收数据块直到文件接收完成
             while bytes_received < expected_size:
-                # 最大缓冲区：8MB
-                client_sock.settimeout(30)  # 设置30秒超时
+                # 检查套接字是否仍然有效
+                try:
+                    # 设置30秒超时
+                    client_sock.settimeout(30)
+                except OSError as e:
+                    logger.error(f"套接字已无效: {e}")
+                    raise ConnectionError(f"套接字已关闭: {e}")
+                
                 try:
                     # 接收数据块头部(数据块大小)
                     header = recv_all(client_sock, 4)
@@ -758,10 +858,14 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         task.file_info.status = "completed"
         # 确保进度显示为100%
         task.update_progress(expected_size)
-        logger.info(f"文件接收任务完成: {task.task_id}, 文件: {task.file_info.file_name}")
+        logger.info(f"文件接收任务完成: {task.transfer_id}, 文件: {task.file_info.file_name}")
         
         # 发送完成确认消息
-        self._send_transfer_complete(task)
+        try:
+            self._send_transfer_complete(task)
+        except Exception as e:
+            logger.warning(f"发送完成确认消息失败: {e}")
+            # 继续执行，不影响本地文件保存
         
     except ConnectionError as e:
         logger.error(f"连接错误: {e}")
@@ -779,16 +883,16 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         task.file_info.status = task.status
         
         # 如果任务失败且临时文件仍存在，删除它
-        if task.status == "failed" and os.path.exists(f"{save_path}.part"):
+        if save_path and task.status == "failed" and os.path.exists(f"{save_path}.part"):
             try:
                 os.remove(f"{save_path}.part")
                 logger.info(f"已删除不完整的临时文件: {save_path}.part")
             except Exception as e:
                 logger.error(f"删除临时文件失败: {e}")
         
-        # 从接收线程列表中移除
-        if task.task_id in self.receiver_threads:
-            del self.receiver_threads[task.task_id]
+        # 从接收线程列表中移除 (修正task_id属性问题)
+        if task.transfer_id in self.receiver_threads:
+            del self.receiver_threads[task.transfer_id]
 
 def _on_file_progress(self, file_info: FileInfo, progress: float, speed: float):
     """文件传输进度回调"""
