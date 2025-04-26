@@ -188,9 +188,18 @@ class SendNowApp(MainWindow):
         # 更新接收面板状态
         self.receivePanel.statusPanel.showCompleted(filename)
         
-        # 设置打开文件和文件夹按钮动作
-        self.receivePanel.statusPanel.openFileButton.clicked.disconnect()
-        self.receivePanel.statusPanel.openFolderButton.clicked.disconnect()
+        # 安全断开可能存在的旧连接
+        try:
+            self.receivePanel.statusPanel.openFileButton.clicked.disconnect()
+        except TypeError:
+            # 如果没有连接，忽略错误
+            pass
+        
+        try:
+            self.receivePanel.statusPanel.openFolderButton.clicked.disconnect()
+        except TypeError:
+            # 如果没有连接，忽略错误
+            pass
         
         # 连接新的动作
         self.receivePanel.statusPanel.openFileButton.clicked.connect(
