@@ -11,9 +11,6 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt5.QtCore import Qt, QSize, pyqtSignal, QMimeData, QUrl, QTimer, QRect, QPoint, QPointF, QPropertyAnimation
 from PyQt5.QtGui import QIcon, QColor, QPalette, QFont, QDrag, QPainter, QPen, QBrush, QPainterPath, QRadialGradient, QLinearGradient, QTransform
 
-# PyQt中QWIDGETSIZE_MAX的值
-QWIDGETSIZE_MAX = 16777215
-
 # 更高对比度的赛博朋克风格色调
 DARK_BG = "#10111E"        # 更深的导航栏背景色
 MAIN_BG = "#151829"        # 更深的主界面背景
@@ -623,8 +620,7 @@ class StatusPanel(QWidget):
         self.fadeAnimation.setDuration(500)  # 500毫秒的淡出时间
         self.fadeAnimation.setStartValue(1.0)
         self.fadeAnimation.setEndValue(0.0)
-        # 不再直接连接到reset方法，让ReceivePanel来处理
-        # self.fadeAnimation.finished.connect(self.reset)
+        self.fadeAnimation.finished.connect(self.reset)
     
     def showProgress(self, file_name=None, mode="receive"):
         """显示进度条和状态
@@ -636,6 +632,7 @@ class StatusPanel(QWidget):
         # 设置透明度为1.0（完全不透明）
         self.setWindowOpacity(1.0)
         
+        # 显示状态元素
         self.statusLabel.setVisible(True)
         self.progressBar.setVisible(True)
         self.actionsWidget.setVisible(False)
@@ -654,34 +651,39 @@ class StatusPanel(QWidget):
             self.statusLabel.setText(f"已发送：{file_name}")
         else:
             self.statusLabel.setText(f"已接收：{file_name}")
+        
+        # 设置进度为100%并显示相应按钮
         self.progressBar.setValue(100)
         self.actionsWidget.setVisible(mode == "receive")  # 只在接收模式下显示操作按钮
         
         # 只在接收模式下显示完成按钮
         if mode == "receive":
             self.completeButton.setVisible(True)
-        
+    
     def fadeOutPanel(self):
         """淡出面板的动画效果"""
+        # 开始淡出动画
         self.fadeAnimation.start()
-        # 由ReceivePanel的resetLayout方法处理重置
     
     def reset(self):
         """重置状态面板"""
-        # 隐藏所有控件
+        # 隐藏所有元素
         self.statusLabel.setVisible(False)
         self.progressBar.setVisible(False)
         self.actionsWidget.setVisible(False)
         self.completeButton.setVisible(False)
-        
-        # 重置进度条值
         self.progressBar.setValue(0)
-        
-        # 隐藏面板自身
         self.setVisible(False)
         
         # 重置透明度为1.0，为下次显示做准备
         self.setWindowOpacity(1.0)
+        
+        # 重置文本内容
+        self.statusLabel.setText("等待中...")
+        
+        # 发送信号或调用回调函数通知父窗口进行布局调整
+        if self.parent() and hasattr(self.parent(), 'onStatusPanelReset'):
+            self.parent().onStatusPanelReset()
 
 class DeviceSearchWidget(QWidget):
     """搜索附近设备的组件"""
@@ -892,8 +894,6 @@ class ReceivePanel(QWidget):
         
         # 状态面板
         self.statusPanel = StatusPanel()
-        # 连接状态面板的淡出动画完成信号到布局重置函数
-        self.statusPanel.fadeAnimation.finished.connect(self.resetLayout)
         
         # 添加到内容布局
         contentLayout.addWidget(self.logoWidget, 0, Qt.AlignCenter)
@@ -927,29 +927,11 @@ class ReceivePanel(QWidget):
         """)
         self.testButton.clicked.connect(self.simulateReceive)
         layout.addWidget(self.testButton, 0, Qt.AlignRight)
-    
-    def resetLayout(self):
-        """重置布局，在状态面板淡出动画结束后调用"""
-        # 重置状态面板
-        self.statusPanel.reset()
         
-        # 保存当前的几何尺寸
-        parentGeometry = None
-        if self.parentWidget():
-            parentGeometry = self.parentWidget().geometry()
-        
-        # 使用延时器来重置布局，确保界面正确刷新
-        def doReset():
-            # 更新当前布局
-            self.updateGeometry()
-            if self.parentWidget():
-                self.parentWidget().adjustSize()
-                if parentGeometry:
-                    # 恢复到原来的几何尺寸
-                    self.parentWidget().setGeometry(parentGeometry)
-        
-        # 稍微延迟执行重置操作，给Qt布局系统一些处理时间
-        QTimer.singleShot(50, doReset)
+        # 保存原始布局的状态
+        self.originalLogoVisible = True
+        self.originalTitleVisible = True
+        self.originalSwitchVisible = True
     
     def simulateReceive(self):
         """模拟接收文件过程"""
@@ -978,6 +960,21 @@ class ReceivePanel(QWidget):
                 self.logoWidget.setActive(True)
             else:  # offButton
                 self.logoWidget.setActive(False)
+    
+    def onStatusPanelReset(self):
+        """当状态面板重置时恢复接收前的界面布局"""
+        # 重新布局UI，确保LogoWidget和其他元素保持可见
+        self.logoWidget.setVisible(True)
+        
+        # 如果接收开关是开启状态，激活logo动画
+        if self.onButton.isChecked():
+            self.logoWidget.setActive(True)
+        else:
+            self.logoWidget.setActive(False)
+        
+        # 更新任何可能的父级布局
+        if self.parent() and hasattr(self.parent(), 'layout'):
+            self.parent().layout().update()
 
 class SendPanel(QWidget):
     """发送文件界面"""
