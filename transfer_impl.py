@@ -734,9 +734,12 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
         task.status = "transferring"
         file_info.status = "transferring"
         
-        # 计算文件哈希值（如果尚未计算）
+        # 计算文件哈希值（如果尚未计算），确保使用SHA-256算法
         if not file_info.file_hash:
-            file_info.calculate_hash()
+            logger.info("计算文件哈希值，使用算法: SHA-256")
+            # 使用FileInfo的compute_hash方法，它会使用SHA-256
+            file_info.compute_hash()
+            logger.info(f"文件哈希值计算完成: {file_info.file_hash}")
         
         # 打开文件并发送数据
         file_size = file_info.file_size
@@ -1332,10 +1335,10 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         # 验证文件哈希(如果有)
         if task.file_info.file_hash:
             try:
-                logger.info(f"开始验证文件哈希值: {task.file_info.file_hash}")
+                logger.info(f"开始验证文件哈希值: {task.file_info.file_hash}，使用SHA-256算法")
                 with open(temp_file_path, 'rb') as f:
-                    file_hash = compute_file_hash(f)
-                    logger.info(f"计算得到的哈希值: {file_hash}")
+                    file_hash = compute_file_hash(f, algorithm='sha256')
+                    logger.info(f"使用SHA-256算法计算得到的哈希值: {file_hash}")
                     if file_hash != task.file_info.file_hash:
                         logger.error(f"文件哈希不匹配: 预期 {task.file_info.file_hash}，计算得到 {file_hash}")
                         task.status = "failed"
