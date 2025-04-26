@@ -1510,9 +1510,9 @@ class SettingsPanel(QWidget):
     
     def browseSavePath(self):
         """选择保存路径"""
-        directory = QFileDialog.getExistingDirectory(self, "选择保存目录")
-        if directory:
-            self.savePathEdit.setText(directory)
+        # 此方法仅为了保持接口一致性而存在
+        # 实际实现在 SendNowApp.on_browse_save_dir 中，避免重复打开文件对话框
+        pass
 
 class MainWindow(QMainWindow):
     """主窗口"""
