@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, 
                              QProgressBar, QListWidget, QListWidgetItem, QStackedWidget, 
                              QFrame, QSplitter, QGridLayout, QSpacerItem, QSizePolicy,
-                             QButtonGroup, QToolButton, QAction)
+                             QButtonGroup, QToolButton, QAction, QPropertyAnimation)
 from PyQt5.QtCore import Qt, QSize, pyqtSignal, QMimeData, QUrl, QTimer, QRect, QPoint, QPointF
 from PyQt5.QtGui import QIcon, QColor, QPalette, QFont, QDrag, QPainter, QPen, QBrush, QPainterPath, QRadialGradient, QLinearGradient, QTransform
 
@@ -580,16 +580,47 @@ class StatusPanel(QWidget):
         
         self.actionsWidget.setVisible(False)
         
+        # 完成按钮（初始隐藏）
+        self.completeButton = QPushButton("完成")
+        self.completeButton.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {HIGHLIGHT_COLOR};
+                color: {TEXT_COLOR};
+                border: none;
+                padding: 8px 25px;
+                border-radius: 4px;
+                font-size: 14px;
+                font-weight: bold;
+                margin-top: 10px;
+            }}
+            QPushButton:hover {{
+                background-color: {QColor(HIGHLIGHT_COLOR).lighter(115).name()};
+            }}
+            QPushButton:pressed {{
+                background-color: {QColor(HIGHLIGHT_COLOR).darker(110).name()};
+            }}
+        """)
+        self.completeButton.setVisible(False)
+        self.completeButton.clicked.connect(self.fadeOutPanel)
+        
         # 添加到主布局
         layout.addStretch()
         layout.addWidget(self.statusLabel)
         layout.addWidget(self.progressBar)
         layout.addWidget(self.actionsWidget)
+        layout.addWidget(self.completeButton, 0, Qt.AlignCenter)
         layout.addStretch()
         
         # 初始隐藏状态文本和进度条
         self.statusLabel.setVisible(False)
         self.progressBar.setVisible(False)
+        
+        # 创建淡出动画对象
+        self.fadeAnimation = QPropertyAnimation(self, b"windowOpacity")
+        self.fadeAnimation.setDuration(500)  # 500毫秒的淡出时间
+        self.fadeAnimation.setStartValue(1.0)
+        self.fadeAnimation.setEndValue(0.0)
+        self.fadeAnimation.finished.connect(self.reset)
     
     def showProgress(self, file_name=None, mode="receive"):
         """显示进度条和状态
@@ -598,9 +629,13 @@ class StatusPanel(QWidget):
             file_name: 文件名
             mode: 模式，可选值为 "receive"(接收) 或 "send"(发送)
         """
+        # 设置透明度为1.0（完全不透明）
+        self.setWindowOpacity(1.0)
+        
         self.statusLabel.setVisible(True)
         self.progressBar.setVisible(True)
         self.actionsWidget.setVisible(False)
+        self.completeButton.setVisible(False)
         self.setVisible(True)
         
         if file_name:
@@ -617,14 +652,25 @@ class StatusPanel(QWidget):
             self.statusLabel.setText(f"已接收：{file_name}")
         self.progressBar.setValue(100)
         self.actionsWidget.setVisible(mode == "receive")  # 只在接收模式下显示操作按钮
+        
+        # 只在接收模式下显示完成按钮
+        if mode == "receive":
+            self.completeButton.setVisible(True)
+    
+    def fadeOutPanel(self):
+        """淡出面板的动画效果"""
+        self.fadeAnimation.start()
     
     def reset(self):
         """重置状态面板"""
         self.statusLabel.setVisible(False)
         self.progressBar.setVisible(False)
         self.actionsWidget.setVisible(False)
+        self.completeButton.setVisible(False)
         self.progressBar.setValue(0)
         self.setVisible(False)
+        # 重置透明度为1.0，为下次显示做准备
+        self.setWindowOpacity(1.0)
 
 class DeviceSearchWidget(QWidget):
     """搜索附近设备的组件"""
