@@ -745,6 +745,9 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
         logger.info(f"文件传输将使用 {chunk_size} 字节的数据块大小")
         bytes_sent = 0
         
+        # 定义块头部的魔数，用于验证数据完整性
+        BLOCK_MAGIC = b'SNFT'  # 'SendNow File Transfer' 的缩写
+        
         with open(file_info.file_path, 'rb') as f:
             while bytes_sent < file_size and not task.cancelled:
                 # 检查是否暂停
@@ -811,38 +814,26 @@ def _send_file(self, task: TransferTask, client_sock: socket.socket = None):
                 if not chunk:
                     break
                 
-                # 构建数据包头
-                header = {
-                    "transfer_id": transfer_id,
-                    "offset": bytes_sent,
-                    "size": len(chunk)
-                }
-                header_json = json.dumps(header)
-                header_bytes = header_json.encode('utf-8')
-                
-                # 验证头部大小是否合理
-                header_len = len(header_bytes)
-                if header_len > 1024:  # 头部不应该超过1KB
-                    logger.warning(f"头部大小异常 ({header_len} 字节)，尝试简化头部内容")
-                    # 使用简化的头部
-                    header = {
-                        "id": transfer_id,
-                        "off": bytes_sent,
-                        "size": len(chunk)
-                    }
-                    header_json = json.dumps(header)
-                    header_bytes = header_json.encode('utf-8')
-                    header_len = len(header_bytes)
-                
                 try:
-                    # 发送头部长度（4字节）
-                    client_sock.sendall(header_len.to_bytes(4, byteorder='big'))
+                    # 使用固定格式的二进制头部代替JSON
+                    # 魔数(4字节) + 块大小(4字节) + 偏移量(8字节) + 传输ID长度(1字节) + 传输ID(变长)
+                    transfer_id_bytes = transfer_id.encode('utf-8')
+                    transfer_id_len = min(len(transfer_id_bytes), 255)  # 限制ID长度不超过255
                     
-                    # 发送头部
-                    client_sock.sendall(header_bytes)
+                    # 构建头部
+                    header = struct.pack(
+                        '!4sIQB', 
+                        BLOCK_MAGIC,                # 魔数：4字节
+                        len(chunk),                # 数据块大小：4字节无符号整数
+                        bytes_sent,                # 偏移量：8字节无符号整数
+                        transfer_id_len            # 传输ID长度：1字节
+                    ) + transfer_id_bytes[:transfer_id_len]  # 传输ID：变长，最多255字节
+                    
+                    # 发送数据块头部
+                    client_sock.sendall(header)
                     
                     # 打印调试信息
-                    logger.debug(f"已发送头部: size={len(chunk)}, offset={bytes_sent}")
+                    logger.debug(f"已发送数据块头部: size={len(chunk)}, offset={bytes_sent}, ID长度={transfer_id_len}")
                     
                     # 发送数据
                     client_sock.sendall(chunk)
@@ -1124,20 +1115,53 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                         continue
                     
                     try:
-                        # 接收数据块头部(数据块大小)
-                        logger.debug("尝试接收数据块头部")
-                        header = recv_all(client_sock, 4)
-                        if not header or len(header) < 4:
-                            logger.error(f"接收文件头错误，收到: {header}")
+                        # 定义块头部的魔数，用于验证数据完整性
+                        BLOCK_MAGIC = b'SNFT'  # 'SendNow File Transfer' 的缩写
+                        
+                        # 接收固定长度的头部 (魔数 + 块大小 + 偏移量 + ID长度)
+                        fixed_header_size = 4 + 4 + 8 + 1  # 魔数(4) + 块大小(4) + 偏移量(8) + ID长度(1)
+                        fixed_header = recv_all(client_sock, fixed_header_size)
+                        
+                        if not fixed_header or len(fixed_header) < fixed_header_size:
+                            logger.error(f"接收头部错误，预期 {fixed_header_size} 字节，收到: {len(fixed_header) if fixed_header else 0} 字节")
                             if retry_count >= max_retries:
-                                raise ConnectionError("接收文件头错误")
+                                raise ConnectionError("接收头部错误")
                             
                             retry_count += 1
                             time.sleep(2)
                             continue
                         
-                        # 解析数据块大小
-                        chunk_size = struct.unpack("!I", header)[0]
+                        # 解析固定部分头部
+                        magic, chunk_size, offset, id_len = struct.unpack('!4sIQB', fixed_header)
+                        
+                        # 验证魔数
+                        if magic != BLOCK_MAGIC:
+                            logger.error(f"数据块魔数不匹配: 预期 {BLOCK_MAGIC}，收到 {magic}")
+                            if retry_count >= max_retries:
+                                raise ConnectionError(f"数据块魔数不匹配")
+                            
+                            retry_count += 1
+                            time.sleep(2)
+                            continue
+                        
+                        # 读取变长部分（传输ID）
+                        if id_len > 0:
+                            transfer_id_bytes = recv_all(client_sock, id_len)
+                            if not transfer_id_bytes or len(transfer_id_bytes) < id_len:
+                                logger.error("接收传输ID错误")
+                                if retry_count >= max_retries:
+                                    raise ConnectionError("接收传输ID错误")
+                                
+                                retry_count += 1
+                                time.sleep(2)
+                                continue
+                            
+                            # 解码传输ID（仅用于日志）
+                            try:
+                                block_transfer_id = transfer_id_bytes.decode('utf-8')
+                                logger.debug(f"数据块传输ID: {block_transfer_id}")
+                            except:
+                                logger.warning("无法解码传输ID")
                         
                         # 添加数据块大小合理性检查
                         max_allowed_chunk_size = 10 * 1024 * 1024  # 10MB最大块大小
@@ -1150,7 +1174,12 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                             time.sleep(2)
                             continue
                         
-                        logger.debug(f"成功接收数据块头部，块大小: {chunk_size} 字节")
+                        # 验证偏移量（应该等于已接收的字节数）
+                        if offset != bytes_received:
+                            logger.warning(f"数据块偏移量不匹配: 预期 {bytes_received}，收到 {offset}")
+                            # 我们仍然继续接收，但记录这个问题
+                            
+                        logger.debug(f"成功接收数据块头部，块大小: {chunk_size} 字节，偏移量: {offset}")
                         
                         # 接收数据块
                         if chunk_size > 0:
