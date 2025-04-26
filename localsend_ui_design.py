@@ -374,14 +374,17 @@ class FileItemWidget(QWidget):
     """文件项部件，包含文件名和删除按钮"""
     deleteClicked = pyqtSignal(QListWidgetItem)
     
-    def __init__(self, file_name, size_str, parent=None):
+    def __init__(self, file_name, size_str, full_path=None, parent=None):
         super().__init__(parent)
-        layout = QHBoxLayout(self)
+        layout = QVBoxLayout(self)  # 改为垂直布局
         layout.setContentsMargins(5, 5, 5, 5)
+        
+        # 顶部布局：文件名和删除按钮
+        topLayout = QHBoxLayout()
         
         # 文件名和大小标签
         self.fileLabel = QLabel(f"{file_name} ({size_str})")
-        self.fileLabel.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 13px;")
+        self.fileLabel.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 13px; font-weight: bold;")
         
         # 删除按钮 - 确保图标为白色
         self.deleteButton = QPushButton()
@@ -408,9 +411,19 @@ class FileItemWidget(QWidget):
         # 删除按钮点击事件
         self.deleteButton.clicked.connect(self.onDeleteClicked)
         
-        # 添加到布局
-        layout.addWidget(self.fileLabel, 1)  # 1表示伸展因子
-        layout.addWidget(self.deleteButton, 0, Qt.AlignRight)  # 右对齐
+        # 添加到顶部布局
+        topLayout.addWidget(self.fileLabel, 1)  # 1表示伸展因子
+        topLayout.addWidget(self.deleteButton, 0, Qt.AlignRight)  # 右对齐
+        
+        # 文件路径标签
+        self.pathLabel = QLabel(full_path if full_path else "")
+        self.pathLabel.setStyleSheet(f"color: {SECONDARY_TEXT_COLOR}; font-size: 11px;")
+        self.pathLabel.setWordWrap(True)  # 允许自动换行
+        self.pathLabel.setTextInteractionFlags(Qt.TextSelectableByMouse)  # 允许用户选择文本
+        
+        # 添加到主布局
+        layout.addLayout(topLayout)
+        layout.addWidget(self.pathLabel)
         
         # 设置整个部件的样式
         self.setStyleSheet(f"""
@@ -996,6 +1009,12 @@ class SendPanel(QWidget):
             box-shadow: 0px 2px 8px rgba(0, 0, 0, 0.15);
         """)
         
+        # ===== 中间区域：状态面板 =====
+        # 添加状态面板用于显示发送进度
+        self.statusPanel = StatusPanel()
+        # 初始时隐藏状态面板中的元素
+        self.statusPanel.reset()
+        
         # ===== 底部区域：附近设备 =====
         
         # 搜索设备组件
@@ -1108,11 +1127,10 @@ class SendPanel(QWidget):
             box-shadow: 0px 2px 8px rgba(0, 0, 0, 0.15);
         """)
         
-        # 添加到主布局
+        # 将所有区域添加到主布局
         layout.addWidget(topAreaWidget)
-        layout.addSpacing(15)
+        layout.addWidget(self.statusPanel)  # 添加状态面板到主布局
         layout.addWidget(self.deviceSearchWidget)
-        layout.addSpacing(10)
         layout.addWidget(self.sendButton, 0, Qt.AlignCenter)
         
         # 配置拖放功能
@@ -1150,7 +1168,7 @@ class SendPanel(QWidget):
             item.setData(Qt.UserRole, path)  # 存储完整路径
             
             # 创建自定义部件
-            file_widget = FileItemWidget(file_name, size_str)
+            file_widget = FileItemWidget(file_name, size_str, path)
             file_widget.setProperty("list_item", item)  # 存储列表项引用
             file_widget.deleteClicked.connect(self.removeFileItem)
             

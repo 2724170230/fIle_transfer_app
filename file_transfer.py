@@ -148,23 +148,35 @@ class FileTransferServer(QObject):
                 client_socket.close()
                 return
             
-            # 解析文件信息
-            file_info = json.loads(info_data.decode('utf-8'))
-            file_info['sender'] = client_address[0]  # 添加发送者IP
+            # 解析请求
+            request = json.loads(info_data.decode('utf-8'))
+            request_type = request.get('type', '')
             
-            logger.info(f"收到文件传输请求: {file_info['name']} ({file_info['size']} 字节) 来自 {client_address[0]}")
-            
-            # 发送待确认的传输请求信号，等待用户确认
-            request_id = str(time.time())
-            self.pending_requests[request_id] = {
-                'file_info': file_info,
-                'client_socket': client_socket,
-                'client_address': client_address
-            }
-            
-            # 向UI发送信号，等待用户确认
-            self.pendingTransferRequest.emit(file_info, client_socket)
-            
+            # 处理文件传输请求
+            if request_type == 'file_transfer':
+                # 获取文件信息
+                file_info = request.get('file_info', {})
+                file_info['sender'] = file_info.get('sender', client_address[0])  # 使用发送方提供的名称或IP地址
+                
+                logger.info(f"收到文件传输请求: {file_info.get('name', 'unknown')} ({file_info.get('size', 0)} 字节) 来自 {file_info['sender']}")
+                
+                # 发送待确认的传输请求信号，等待用户确认
+                request_id = str(time.time())
+                self.pending_requests[request_id] = {
+                    'file_info': file_info,
+                    'client_socket': client_socket,
+                    'client_address': client_address
+                }
+                
+                # 向UI发送信号，等待用户确认
+                self.pendingTransferRequest.emit(file_info, client_socket)
+            else:
+                # 未知请求类型
+                logger.warning(f"收到未知请求类型: {request_type}")
+                response = {"status": "error", "message": "Unknown request type"}
+                client_socket.sendall(json.dumps(response).encode('utf-8'))
+                client_socket.close()
+        
         except Exception as e:
             logger.error(f"处理传输请求失败: {str(e)}")
             try:
@@ -176,7 +188,7 @@ class FileTransferServer(QObject):
         """接受文件传输请求"""
         # 向客户端发送接受响应
         try:
-            response = {"status": "accepted"}
+            response = {"status": "ready", "message": "Server is ready to receive the file"}
             client_socket.sendall(json.dumps(response).encode('utf-8'))
             
             # 启动文件接收线程
@@ -200,7 +212,7 @@ class FileTransferServer(QObject):
         """拒绝文件传输请求"""
         try:
             # 向客户端发送拒绝响应
-            response = {"status": "rejected", "reason": "User rejected the transfer"}
+            response = {"status": "rejected", "message": "User rejected the transfer"}
             client_socket.sendall(json.dumps(response).encode('utf-8'))
             client_socket.close()
             
@@ -356,35 +368,43 @@ class FileTransferClient(QObject):
     
     def _send_file_thread(self, file_path, file_info, server_host, server_port):
         """文件发送线程"""
-        filename = file_info["name"]
-        file_size = file_info["size"]
-        
         try:
-            # 连接到服务器
-            self.statusChanged.emit(f"正在连接到 {server_host}:{server_port}...")
+            filename = file_info["name"]
+            file_size = file_info["size"]
+            file_hash = file_info.get("hash", "")
+            
+            # 更新状态信息，包含文件名
+            self.statusChanged.emit(f"正在发送: {filename}")
+            
+            # 创建客户端套接字
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.client_socket.settimeout(60)  # 设置超时时间为60秒（1分钟）
+            
+            # 连接服务器
+            self.statusChanged.emit(f"正在连接: {server_host}:{server_port}")
+            
+            # 连接到服务器
             self.client_socket.connect((server_host, server_port))
             
             # 发送文件信息
-            self.statusChanged.emit("正在发送文件信息...")
-            info_json = json.dumps(file_info)
-            self.client_socket.sendall(info_json.encode('utf-8'))
+            # 添加发送方设备信息
+            file_info["sender"] = socket.gethostname()
+            request = {"type": "file_transfer", "file_info": file_info}
+            
+            # 发送请求
+            self.client_socket.sendall(json.dumps(request).encode('utf-8'))
             
             # 等待服务器确认
             response_data = self.client_socket.recv(4096)
             if not response_data:
-                raise Exception("服务器没有响应")
+                raise Exception("服务器没有响应传输请求")
             
             response = json.loads(response_data.decode('utf-8'))
+            if response.get("status") != "ready":
+                raise Exception(f"服务器拒绝传输请求: {response.get('message', '未知原因')}")
             
-            # 检查服务器响应
-            if response.get("status") != "accepted":
-                reason = response.get("reason", "未知原因")
-                raise Exception(f"服务器拒绝了传输请求: {reason}")
-            
-            # 发送文件数据
-            self.statusChanged.emit(f"正在发送文件: {filename}")
+            # 开始发送文件数据
+            self.statusChanged.emit(f"正在发送: {filename}")
             
             with open(file_path, 'rb') as f:
                 sent = 0

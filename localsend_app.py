@@ -448,9 +448,16 @@ class SendNowApp(MainWindow):
         if "正在连接" in status or "正在发送" in status:
             self.sendPanel.sendButton.setEnabled(False)
             self.sendPanel.sendButton.setText("发送中...")
+            # 初始化进度条显示
+            if "正在发送" in status:
+                # 从状态中提取文件名，假设格式为"正在发送: filename"
+                parts = status.split(":", 1)
+                filename = parts[1].strip() if len(parts) > 1 else "文件"
+                self.sendPanel.statusPanel.showProgress(filename)
         elif "传输已完成" in status:
             self.sendPanel.sendButton.setEnabled(True)
             self.sendPanel.sendButton.setText("发送文件")
+            # 不在这里隐藏进度条，传输完成事件会处理
     
     def on_client_progress(self, filename, current, total):
         """处理客户端传输进度事件"""
@@ -458,13 +465,15 @@ class SendNowApp(MainWindow):
         percent = (current * 100) // total if total > 0 else 0
         logger.debug(f"发送进度: {filename} - {current}/{total} 字节 ({percent}%)")
         
-        # 这里可以添加发送进度UI更新
-        # 当前UI没有发送进度条，可以考虑在发送按钮上显示进度文本
-        self.sendPanel.sendButton.setText(f"发送中... {percent}%")
+        # 更新发送进度UI
+        self.sendPanel.statusPanel.progressBar.setValue(percent)
     
     def on_client_transfer_complete(self, filename, response):
         """处理客户端传输完成事件"""
         logger.info(f"文件发送完成: {filename} - {response}")
+        
+        # 更新状态面板显示完成
+        self.sendPanel.statusPanel.showCompleted(filename)
         
         # 重置发送按钮
         self.sendPanel.sendButton.setEnabled(True)
@@ -473,10 +482,17 @@ class SendNowApp(MainWindow):
         # 显示成功消息
         msg_box = create_message_box(self, QMessageBox.Information, "发送成功", f"文件 {filename} 已成功发送!")
         msg_box.exec_()
+        
+        # 延迟重置状态面板（3秒后）
+        QTimer.singleShot(3000, self.sendPanel.statusPanel.reset)
     
     def on_client_transfer_failed(self, filename, error):
         """处理客户端传输失败事件"""
         logger.error(f"文件发送失败: {filename} - {error}")
+        
+        # 更新状态面板显示失败
+        self.sendPanel.statusPanel.statusLabel.setText(f"发送失败: {error}")
+        self.sendPanel.statusPanel.progressBar.setValue(0)
         
         # 重置发送按钮
         self.sendPanel.sendButton.setEnabled(True)
@@ -485,6 +501,9 @@ class SendNowApp(MainWindow):
         # 显示错误提示
         msg_box = create_message_box(self, QMessageBox.Warning, "发送失败", f"文件 {filename} 发送失败:\n{error}")
         msg_box.exec_()
+        
+        # 延迟重置状态面板（3秒后）
+        QTimer.singleShot(3000, self.sendPanel.statusPanel.reset)
     
     # ===== UI事件处理 =====
     
