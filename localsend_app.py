@@ -212,19 +212,14 @@ class SendNowApp(MainWindow):
         self.device_name, self.device_id = DeviceNameGenerator.get_persistent_name_and_id()
         logger.info(f"设备信息: {self.device_name} {self.device_id}")
         
+        # 初始化网络发现模块
+        self.network_discovery = NetworkDiscovery(self.device_name, self.device_id)
+        
         # 初始化文件传输服务器
         self.transfer_server = FileTransferServer()
         
         # 初始化文件传输客户端
         self.transfer_client = FileTransferClient()
-        
-        # 初始化网络发现模块 - 传入传输服务器的端口
-        self.network_discovery = NetworkDiscovery(self.device_name, self.device_id, self.transfer_server.port)
-        
-        # 更新接收面板中的端口信息 - 确保设置正确的端口号
-        if hasattr(self, 'receivePanel'):
-            self.receivePanel.service_port = self.transfer_server.port  # 明确设置端口号
-            self.receivePanel.update_local_ip()  # 更新IP地址
         
         # 连接信号与槽
         self.connect_signals()
@@ -383,11 +378,6 @@ class SendNowApp(MainWindow):
         
         # 跳转到接收面板
         self.receiveButton.setChecked(True)
-        
-        # 确保接收面板信息是最新的
-        self.receivePanel.service_port = self.transfer_server.port
-        self.receivePanel.update_local_ip()
-        
         self.stack.setCurrentWidget(self.receivePanel)
         
         # 确保开启接收模式
@@ -425,9 +415,6 @@ class SendNowApp(MainWindow):
         
         # 更新接收面板进度条
         self.receivePanel.statusPanel.progressBar.setValue(percent)
-        
-        # 更新传输速度显示
-        self.receivePanel.statusPanel.updateTransferSpeed(current, total)
     
     def on_server_transfer_complete(self, filename, path):
         """处理服务器传输完成事件"""
@@ -497,9 +484,6 @@ class SendNowApp(MainWindow):
         
         # 更新发送进度条
         self.sendPanel.statusPanel.progressBar.setValue(percent)
-        
-        # 更新传输速度显示
-        self.sendPanel.statusPanel.updateTransferSpeed(current, total)
     
     def on_client_transfer_complete(self, filename, response):
         """处理客户端传输完成事件"""
