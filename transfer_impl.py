@@ -884,8 +884,28 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
     max_retries = 3  # 最大重试次数
     retry_count = 0  # 当前重试次数
     temp_file_path = None
+    received_data = bytearray()  # 存储接收到的所有数据
     
     try:
+        # 确保传输的目录是固定的，方便排查问题
+        fixed_save_dir = os.path.join(os.path.expanduser("~"), "Downloads", "SendNow")
+        
+        # 确保这个目录存在
+        os.makedirs(fixed_save_dir, exist_ok=True)
+        
+        # 设置文件名 - 使用时间戳作为前缀，避免冲突
+        timestamp = int(time.time())
+        file_name = f"{timestamp}_{task.file_info.file_name}"
+        fixed_save_path = os.path.join(fixed_save_dir, file_name)
+        
+        # 覆盖原有的保存路径
+        task.file_info.save_path = fixed_save_path
+        
+        # 记录设置的固定保存路径
+        logger.info(f"======================================================")
+        logger.info(f"文件将保存到固定路径: {fixed_save_path}")
+        logger.info(f"======================================================")
+        
         # 确认文件信息已设置
         if not task.file_info or not task.file_info.save_path:
             raise ValueError(f"任务{task.transfer_id}的文件信息未设置或保存路径无效")
@@ -1068,6 +1088,9 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                             os.fsync(f.fileno())
                             logger.debug("数据已写入磁盘")
                             
+                            # 保存数据到内存中，用于可能的恢复
+                            received_data.extend(chunk)
+                            
                             bytes_received += len(chunk)
                             
                             # 更新进度
@@ -1219,6 +1242,67 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
         except Exception as e:
             logger.warning(f"发送完成确认消息失败: {e}")
             # 继续执行，不影响本地文件保存
+        
+        # 确保文件成功保存 - 额外验证步骤
+        if os.path.exists(save_path):
+            file_size = os.path.getsize(save_path)
+            logger.info(f"最终验证: 文件存在于 {save_path}, 大小: {file_size} 字节")
+            
+            # 如果文件大小不正确，尝试从内存中恢复
+            if file_size != expected_size and len(received_data) == expected_size:
+                logger.warning(f"文件大小不匹配，尝试从内存重新保存")
+                
+                # 备份路径
+                backup_path = f"{save_path}.backup"
+                
+                try:
+                    # 重新保存文件
+                    with open(backup_path, 'wb') as f:
+                        f.write(received_data)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    
+                    logger.info(f"已创建备份文件: {backup_path}, 大小: {len(received_data)} 字节")
+                    
+                    # 复制到原始位置
+                    try:
+                        os.remove(save_path)
+                    except:
+                        pass
+                    
+                    # 将备份文件重命名为最终文件
+                    os.rename(backup_path, save_path)
+                    logger.info(f"已从备份恢复文件: {save_path}")
+                except Exception as e:
+                    logger.error(f"从内存保存文件失败: {e}")
+        else:
+            logger.error(f"最终验证失败: 文件不存在于 {save_path}")
+            
+            # 如果文件不存在但我们有完整数据，尝试保存
+            if len(received_data) == expected_size:
+                logger.info(f"尝试从内存中恢复文件")
+                
+                try:
+                    # 尝试保存到下载目录
+                    downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+                    backup_path = os.path.join(downloads_dir, f"BACKUP_{os.path.basename(save_path)}")
+                    
+                    # 写入数据
+                    with open(backup_path, 'wb') as f:
+                        f.write(received_data)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    
+                    logger.info(f"已成功将文件保存到备份位置: {backup_path}")
+                    
+                    # 尝试复制到原始位置
+                    import shutil
+                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                    shutil.copy2(backup_path, save_path)
+                    logger.info(f"已将备份复制到预期位置: {save_path}")
+                except Exception as e:
+                    logger.error(f"恢复保存文件失败: {e}")
+                    logger.error(traceback.format_exc())
         
     except ConnectionError as e:
         logger.error(f"连接错误: {e}")

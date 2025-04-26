@@ -26,10 +26,18 @@ from app_controller import AppController
 
 # 配置日志
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # 改为DEBUG级别以获取更多信息
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+
+# 添加文件日志处理器
+log_file = os.path.join(os.path.expanduser("~"), "SendNow.log")
+file_handler = logging.FileHandler(log_file)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+logging.getLogger().addHandler(file_handler)
+
 logger = logging.getLogger("SendNow")
+logger.info(f"日志文件将保存到: {log_file}")
 
 def main():
     """程序入口"""
