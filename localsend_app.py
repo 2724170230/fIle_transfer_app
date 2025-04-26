@@ -460,9 +460,8 @@ class SendNowApp(MainWindow):
         percent = (current * 100) // total if total > 0 else 0
         logger.debug(f"发送进度: {filename} - {current}/{total} 字节 ({percent}%)")
         
-        # 确保进度条显示，第一次时显示文件名
-        # 仅当状态标签不可见时才调用showProgress
-        if not self.sendPanel.statusPanel.statusLabel.isVisible():
+        # 显示发送进度条
+        if not self.sendPanel.statusPanel.isVisible():
             self.sendPanel.statusPanel.showProgress(filename, mode="send")
         
         # 更新发送进度条
@@ -476,7 +475,7 @@ class SendNowApp(MainWindow):
         self.sendPanel.statusPanel.showCompleted(filename, mode="send")
         
         # 创建一个计时器，在显示完成状态一段时间后自动隐藏
-        QTimer.singleShot(3000, self.sendPanel.statusPanel.hideContent)
+        QTimer.singleShot(3000, self.sendPanel.statusPanel.reset)
         
         # 重置发送按钮
         self.sendPanel.sendButton.setEnabled(True)
@@ -491,11 +490,12 @@ class SendNowApp(MainWindow):
         logger.error(f"文件发送失败: {filename} - {error}")
         
         # 更新发送面板状态
-        self.sendPanel.statusPanel.statusLabel.setText(f"发送失败: {error}")
-        self.sendPanel.statusPanel.actionsWidget.setVisible(False)
-        
-        # 创建一个计时器，在显示失败状态一段时间后自动隐藏
-        QTimer.singleShot(3000, self.sendPanel.statusPanel.hideContent)
+        if self.sendPanel.statusPanel.isVisible():
+            self.sendPanel.statusPanel.statusLabel.setText(f"发送失败: {error}")
+            self.sendPanel.statusPanel.actionsWidget.setVisible(False)
+            
+            # 创建一个计时器，在显示失败状态一段时间后自动隐藏
+            QTimer.singleShot(3000, self.sendPanel.statusPanel.reset)
         
         # 重置发送按钮
         self.sendPanel.sendButton.setEnabled(True)
@@ -581,7 +581,7 @@ class SendNowApp(MainWindow):
             return
         
         # 重置发送状态面板
-        self.sendPanel.statusPanel.hideContent()
+        self.sendPanel.statusPanel.reset()
         
         # 开始发送文件
         logger.info(f"开始发送文件: {file_path} 到 {device_ip}:{device_port}")

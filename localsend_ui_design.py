@@ -528,9 +528,6 @@ class StatusPanel(QWidget):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         
-        # 使用固定高度，确保隐藏后不会导致界面布局变化
-        self.setMinimumHeight(150)
-        
         # 状态标签
         self.statusLabel = QLabel("等待中...")
         self.statusLabel.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 18px;")
@@ -618,18 +615,12 @@ class StatusPanel(QWidget):
         self.statusLabel.setVisible(False)
         self.progressBar.setVisible(False)
         
-        # 创建不透明度动画
+        # 创建淡出动画对象
         self.fadeAnimation = QPropertyAnimation(self, b"windowOpacity")
         self.fadeAnimation.setDuration(500)  # 500毫秒的淡出时间
         self.fadeAnimation.setStartValue(1.0)
         self.fadeAnimation.setEndValue(0.0)
-        self.fadeAnimation.finished.connect(self.hideContent)
-        
-        # 创建一个空白占位面板，保持布局稳定
-        self.placeholderWidget = QWidget()
-        self.placeholderWidget.setMinimumHeight(1)  # 最小高度确保它存在但不可见
-        self.placeholderWidget.setMaximumHeight(1)
-        layout.addWidget(self.placeholderWidget)
+        self.fadeAnimation.finished.connect(self.reset)
     
     def showProgress(self, file_name=None, mode="receive"):
         """显示进度条和状态
@@ -670,20 +661,16 @@ class StatusPanel(QWidget):
         """淡出面板的动画效果"""
         self.fadeAnimation.start()
     
-    def hideContent(self):
-        """动画结束后隐藏内容，但保持面板本身可见以维持布局"""
+    def reset(self):
+        """重置状态面板"""
         self.statusLabel.setVisible(False)
         self.progressBar.setVisible(False)
         self.actionsWidget.setVisible(False)
         self.completeButton.setVisible(False)
         self.progressBar.setValue(0)
+        self.setVisible(False)
         # 重置透明度为1.0，为下次显示做准备
         self.setWindowOpacity(1.0)
-    
-    def reset(self):
-        """完全重置状态面板（只在切换面板或关闭应用时使用）"""
-        self.hideContent()
-        # 注意这里不设置self.setVisible(False)，保持面板占位
 
 class DeviceSearchWidget(QWidget):
     """搜索附近设备的组件"""
@@ -1083,8 +1070,7 @@ class SendPanel(QWidget):
         
         # ===== 发送状态面板 =====
         self.statusPanel = StatusPanel()
-        # 不再设置为不可见，而是保持可见并隐藏内容
-        self.statusPanel.hideContent()
+        self.statusPanel.setVisible(False)  # 初始隐藏状态面板
         
         # ===== 底部区域：附近设备 =====
         
