@@ -16,6 +16,7 @@ logger = logging.getLogger("FileTransfer")
 BUFFER_SIZE = 8192  # 8KB缓冲区
 CHUNK_SIZE = 1024 * 1024  # 1MB块大小
 SERVICE_PORT = 45679  # 默认传输服务端口
+DEFAULT_SAVE_DIR = os.path.expanduser("~/Downloads/SendNow")  # 默认保存目录
 
 class FileTransferStatus:
     """文件传输状态常量"""
@@ -37,15 +38,17 @@ class FileTransferServer(QObject):
     transferFailed = pyqtSignal(str, str)  # 传输失败信号（文件名，错误信息）
     pendingTransferRequest = pyqtSignal(dict, object)  # 等待用户确认的传输请求（文件信息，客户端套接字）
     
-    def __init__(self, host='0.0.0.0', port=SERVICE_PORT):
+    def __init__(self, host='0.0.0.0', port=SERVICE_PORT, save_dir=None):
         super().__init__()
         self.host = host
         self.port = port
         self.server_socket = None
         self.running = False
         self.transfer_thread = None
-        self.save_dir = os.path.expanduser("~/Downloads/SendNow")
         
+        # 设置保存目录
+        self.save_dir = save_dir if save_dir else DEFAULT_SAVE_DIR
+            
         # 待处理的传输请求
         self.pending_requests = {}
         

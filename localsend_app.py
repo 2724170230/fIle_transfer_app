@@ -1,6 +1,7 @@
 import sys
 import os
 import logging
+import json
 from PyQt5.QtWidgets import (QApplication, QMessageBox, QFileDialog, 
                             QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                             QPushButton, QRadioButton, QButtonGroup)
@@ -15,6 +16,114 @@ from file_transfer import FileTransferServer, FileTransferClient
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("SendNowApp")
 
+class ConfigManager:
+    """配置管理类，处理应用程序配置的保存和读取"""
+    
+    CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".sendnow_config")
+    DEFAULT_SAVE_DIR = os.path.expanduser("~/Downloads/SendNow")
+    
+    @staticmethod
+    def load_config():
+        """加载配置信息"""
+        config = {
+            "device_name": None,
+            "device_id": None,
+            "save_dir": ConfigManager.DEFAULT_SAVE_DIR
+        }
+        
+        try:
+            if os.path.exists(ConfigManager.CONFIG_FILE):
+                with open(ConfigManager.CONFIG_FILE, "r") as f:
+                    content = f.read().strip()
+                    
+                    # 尝试解析为JSON格式（新格式）
+                    try:
+                        loaded_config = json.loads(content)
+                        config.update(loaded_config)
+                    except json.JSONDecodeError:
+                        # 兼容旧格式（name,id）
+                        parts = content.split(",")
+                        if len(parts) >= 2:
+                            config["device_name"] = parts[0]
+                            config["device_id"] = parts[1]
+        except Exception as e:
+            logger.error(f"加载配置失败: {str(e)}")
+        
+        return config
+    
+    @staticmethod
+    def save_config(config):
+        """保存配置信息"""
+        try:
+            # 确保配置是字典格式
+            if not isinstance(config, dict):
+                logger.error("无效的配置格式")
+                return False
+            
+            # 保存为JSON格式
+            with open(ConfigManager.CONFIG_FILE, "w") as f:
+                json.dump(config, f)
+            
+            logger.info("配置已保存")
+            return True
+        
+        except Exception as e:
+            logger.error(f"保存配置失败: {str(e)}")
+            return False
+    
+    @staticmethod
+    def get_name_and_id():
+        """获取设备名称和ID"""
+        config = ConfigManager.load_config()
+        
+        name = config.get("device_name")
+        device_id = config.get("device_id")
+        
+        # 如果没有名称和ID，生成新的
+        if not name or not device_id:
+            name = DeviceNameGenerator.generate_name()
+            device_id = DeviceNameGenerator.generate_id(name)
+            
+            # 更新并保存配置
+            config["device_name"] = name
+            config["device_id"] = device_id
+            ConfigManager.save_config(config)
+        
+        return name, device_id
+    
+    @staticmethod
+    def get_save_dir():
+        """获取保存目录"""
+        config = ConfigManager.load_config()
+        save_dir = config.get("save_dir", ConfigManager.DEFAULT_SAVE_DIR)
+        
+        # 确保目录存在
+        try:
+            os.makedirs(save_dir, exist_ok=True)
+        except:
+            # 如果目录创建失败，使用默认目录
+            save_dir = ConfigManager.DEFAULT_SAVE_DIR
+            os.makedirs(save_dir, exist_ok=True)
+        
+        return save_dir
+    
+    @staticmethod
+    def set_save_dir(directory):
+        """设置保存目录"""
+        try:
+            # 加载当前配置
+            config = ConfigManager.load_config()
+            
+            # 更新保存目录
+            config["save_dir"] = directory
+            
+            # 保存配置
+            return ConfigManager.save_config(config)
+        
+        except Exception as e:
+            logger.error(f"设置保存目录失败: {str(e)}")
+            return False
+
 class FileReceiveDialog(QDialog):
     """文件接收确认对话框"""
     
@@ -27,7 +136,8 @@ class FileReceiveDialog(QDialog):
         if parent and hasattr(parent, 'transfer_server'):
             self.default_save_dir = parent.transfer_server.save_dir
         else:
-            self.default_save_dir = os.path.expanduser("~/Downloads/SendNow")
+            # 如果无法从父窗口获取，则从配置获取
+            self.default_save_dir = ConfigManager.get_save_dir()
         
         self.setup_ui()
     
@@ -137,14 +247,17 @@ class SendNowApp(MainWindow):
         super().__init__()
         
         # 获取或生成设备名称和ID
-        self.device_name, self.device_id = DeviceNameGenerator.get_persistent_name_and_id()
+        self.device_name, self.device_id = ConfigManager.get_name_and_id()
         logger.info(f"设备信息: {self.device_name} {self.device_id}")
         
         # 初始化网络发现模块
         self.network_discovery = NetworkDiscovery(self.device_name, self.device_id)
         
+        # 获取默认保存路径
+        save_dir = ConfigManager.get_save_dir()
+        
         # 初始化文件传输服务器
-        self.transfer_server = FileTransferServer()
+        self.transfer_server = FileTransferServer(save_dir=save_dir)
         
         # 初始化文件传输客户端
         self.transfer_client = FileTransferClient()
@@ -153,7 +266,7 @@ class SendNowApp(MainWindow):
         self.connect_signals()
         
         # 设置设置面板中的保存路径
-        self.settingsPanel.savePathEdit.setText(self.transfer_server.save_dir)
+        self.settingsPanel.savePathEdit.setText(save_dir)
         
         # 启动服务
         self.start_services()
@@ -303,7 +416,7 @@ class SendNowApp(MainWindow):
         
         if result == QDialog.Accepted:
             # 用户接受文件传输
-            save_dir = dialog.save_dir if dialog.save_dir else self.transfer_server.save_dir
+            save_dir = dialog.save_dir if dialog.save_dir else ConfigManager.get_save_dir()
             client_address = (file_info['sender'], 0)  # 端口为0，因为这里不重要
             
             # 获取客户端传过来的文件信息
@@ -500,14 +613,17 @@ class SendNowApp(MainWindow):
         directory = QFileDialog.getExistingDirectory(
             self,
             "选择文件保存目录",
-            self.transfer_server.save_dir
+            ConfigManager.get_save_dir()
         )
         
         if directory:
-            # 设置新的保存目录
+            # 设置新的保存目录 (先在服务器上设置)
             success = self.transfer_server.set_save_directory(directory)
             
             if success:
+                # 更新配置
+                ConfigManager.set_save_dir(directory)
+                
                 # 更新设置面板中的显示
                 self.settingsPanel.savePathEdit.setText(directory)
                 logger.info(f"已更新默认保存路径: {directory}")
