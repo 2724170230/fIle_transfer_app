@@ -3,15 +3,13 @@ import random
 import hashlib
 import os
 import math  # 添加math模块导入
-import time  # 添加time模块导入用于计算传输速度
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, 
                              QProgressBar, QListWidget, QListWidgetItem, QStackedWidget, 
                              QFrame, QSplitter, QGridLayout, QSpacerItem, QSizePolicy,
-                             QButtonGroup, QToolButton, QAction, QToolTip, QDialog)
+                             QButtonGroup, QToolButton, QAction)
 from PyQt5.QtCore import Qt, QSize, pyqtSignal, QMimeData, QUrl, QTimer, QRect, QPoint, QPointF, QPropertyAnimation, QEasingCurve
 from PyQt5.QtGui import QIcon, QColor, QPalette, QFont, QDrag, QPainter, QPen, QBrush, QPainterPath, QRadialGradient, QLinearGradient, QTransform
-import platform
 
 # 更高对比度的赛博朋克风格色调
 DARK_BG = "#10111E"        # 更深的导航栏背景色
@@ -538,21 +536,6 @@ class FileListWidget(QListWidget):
             with open(trash_icon_path, 'w') as f:
                 f.write(trash_svg)
 
-    def create_history_icon(self):
-        """创建历史记录图标，如果不存在"""
-        history_icon_path = "icons/history.svg"
-        os.makedirs("icons", exist_ok=True)
-        
-        if not os.path.exists(history_icon_path):
-            # 简单的历史记录SVG图标 - 白色
-            history_svg = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"></circle>
-                <polyline points="12 6 12 12 16 14"></polyline>
-            </svg>"""
-            
-            with open(history_icon_path, 'w') as f:
-                f.write(history_svg)
-
 class StatusPanel(QWidget):
     """传输状态面板"""
     
@@ -564,12 +547,6 @@ class StatusPanel(QWidget):
         self.statusLabel = QLabel("等待中...")
         self.statusLabel.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 18px;")
         self.statusLabel.setAlignment(Qt.AlignCenter)
-        
-        # 传输速度标签
-        self.speedLabel = QLabel("")
-        self.speedLabel.setStyleSheet(f"color: {SECONDARY_TEXT_COLOR}; font-size: 14px;")
-        self.speedLabel.setAlignment(Qt.AlignCenter)
-        self.speedLabel.setVisible(False)  # 初始隐藏
         
         # 进度条
         self.progressBar = QProgressBar()
@@ -648,7 +625,6 @@ class StatusPanel(QWidget):
         # 添加到主布局
         layout.addStretch()
         layout.addWidget(self.statusLabel)
-        layout.addWidget(self.speedLabel)  # 添加速度标签
         layout.addWidget(self.progressBar)
         layout.addWidget(self.actionsWidget)
         layout.addWidget(self.completeButtonWidget)
@@ -665,10 +641,6 @@ class StatusPanel(QWidget):
         self.fadeAnimation.setEndValue(0.0)
         self.fadeAnimation.setEasingCurve(QEasingCurve.OutQuad)
         self.fadeAnimation.finished.connect(self.onFadeOutFinished)
-        
-        # 传输速度计算相关变量
-        self.last_update_time = 0
-        self.last_bytes = 0
     
     def showProgress(self, file_name=None, mode="receive"):
         """显示进度条和状态
@@ -681,66 +653,16 @@ class StatusPanel(QWidget):
         self.setWindowOpacity(1.0)
         
         self.statusLabel.setVisible(True)
-        self.speedLabel.setVisible(True)  # 显示速度标签
         self.progressBar.setVisible(True)
         self.actionsWidget.setVisible(False)
         self.completeButtonWidget.setVisible(False)
         self.setVisible(True)
-        
-        # 重置传输速度计算相关变量
-        self.last_update_time = time.time()
-        self.last_bytes = 0
-        self.speedLabel.setText("计算中...")
         
         if file_name:
             if mode == "send":
                 self.statusLabel.setText(f"正在发送文件：{file_name}")
             else:
                 self.statusLabel.setText(f"正在接收文件：{file_name}")
-    
-    def updateTransferSpeed(self, current_bytes, total_bytes):
-        """更新传输速度显示
-        
-        参数:
-            current_bytes: 当前已传输的字节数
-            total_bytes: 总字节数
-        """
-        current_time = time.time()
-        time_diff = current_time - self.last_update_time
-        
-        # 至少等待0.5秒更新一次速度，避免频繁更新
-        if time_diff > 0.5 and self.last_update_time > 0:
-            bytes_diff = current_bytes - self.last_bytes
-            speed = bytes_diff / time_diff  # 字节/秒
-            
-            # 格式化速度显示
-            if speed < 1024:
-                speed_str = f"{speed:.1f} B/s"
-            elif speed < 1024 * 1024:
-                speed_str = f"{speed/1024:.1f} KB/s"
-            else:
-                speed_str = f"{speed/(1024*1024):.1f} MB/s"
-            
-            # 计算剩余时间
-            remaining_bytes = total_bytes - current_bytes
-            if speed > 0:
-                remaining_seconds = remaining_bytes / speed
-                
-                # 格式化剩余时间
-                if remaining_seconds < 60:
-                    time_str = f"{int(remaining_seconds)}秒"
-                elif remaining_seconds < 3600:
-                    time_str = f"{int(remaining_seconds/60)}分{int(remaining_seconds%60)}秒"
-                else:
-                    time_str = f"{int(remaining_seconds/3600)}时{int((remaining_seconds%3600)/60)}分"
-                
-                self.speedLabel.setText(f"速度: {speed_str} | 剩余时间: {time_str}")
-            else:
-                self.speedLabel.setText(f"速度: {speed_str}")
-            
-            # 更新计算基准值
-            self.last_update_time = current_time
-            self.last_bytes = current_bytes
     
     def showCompleted(self, file_name, mode="receive"):
         """显示传输完成状态"""
@@ -749,21 +671,11 @@ class StatusPanel(QWidget):
         else:
             self.statusLabel.setText(f"已接收：{file_name}")
         self.progressBar.setValue(100)
-        self.speedLabel.setText("传输完成")  # 更新速度标签
         self.actionsWidget.setVisible(mode == "receive")  # 只在接收模式下显示操作按钮
         
         # 在接收模式下显示完成按钮
         if mode == "receive":
             self.completeButtonWidget.setVisible(True)
-            
-            # 保存到历史记录
-            parent = self.parent()
-            if hasattr(parent, 'saveTransferHistory'):
-                # 由于这是模拟，我们假设从"未知设备"接收
-                sender_name = "未知设备"
-                # 保存路径假设为用户的文档目录下的LocalSend文件夹
-                full_path = os.path.join(os.path.expanduser("~"), "Documents", "LocalSend", file_name)
-                parent.saveTransferHistory(sender_name, file_name, full_path)
     
     def fadeOutAndReset(self):
         """开始淡出动画效果"""
@@ -778,16 +690,11 @@ class StatusPanel(QWidget):
     def reset(self):
         """重置状态面板"""
         self.statusLabel.setVisible(False)
-        self.speedLabel.setVisible(False)  # 隐藏速度标签
         self.progressBar.setVisible(False)
         self.actionsWidget.setVisible(False)
         self.completeButtonWidget.setVisible(False)
         self.progressBar.setValue(0)
         self.setVisible(False)
-        
-        # 重置传输速度计算相关变量
-        self.last_update_time = 0
-        self.last_bytes = 0
 
 class DeviceSearchWidget(QWidget):
     """搜索附近设备的组件"""
@@ -926,92 +833,6 @@ class ReceivePanel(QWidget):
         # 获取设备名称和ID
         self.device_name, self.device_id = DeviceNameGenerator.get_persistent_name_and_id()
         
-        # 创建一个标题栏部件，包含信息按钮和历史记录按钮
-        titleBarWidget = QWidget()
-        titleBarLayout = QHBoxLayout(titleBarWidget)
-        titleBarLayout.setContentsMargins(0, 0, 0, 0)
-        
-        # 添加信息按钮到右上角
-        self.infoButton = QToolButton()
-        self.infoButton.setText("i")
-        # 移除默认的工具提示，完全依赖自定义事件过滤器实现
-        # self.infoButton.setToolTip("设备信息")
-        self.infoButton.setFixedSize(28, 28)  # 固定大小的圆形按钮
-        self.infoButton.setStyleSheet(f"""
-            QToolButton {{
-                background-color: {ACCENT_COLOR};
-                color: {TEXT_COLOR};
-                border: none;
-                border-radius: 14px;
-                font-size: 16px;
-                font-weight: bold;
-                font-family: 'Arial';
-                min-width: 28px;
-                min-height: 28px;
-                padding: 0px;
-                margin: 0px;
-            }}
-            QToolButton:hover {{
-                background-color: {HIGHLIGHT_COLOR};
-            }}
-            QToolTip {{
-                background-color: {PANEL_BG};
-                color: {TEXT_COLOR};
-                border: 1px solid {BORDER_COLOR};
-                border-radius: 4px;
-                padding: 6px;
-                font-size: 13px;
-            }}
-        """)
-        
-        # 创建历史记录图标
-        self.create_history_icon()
-        
-        # 添加历史记录按钮
-        self.historyButton = QToolButton()
-        # 使用图标代替文字"H"
-        self.historyButton.setIcon(QIcon("icons/history.svg"))
-        self.historyButton.setIconSize(QSize(16, 16))
-        self.historyButton.setFixedSize(28, 28)
-        self.historyButton.setStyleSheet(f"""
-            QToolButton {{
-                background-color: {HIGHLIGHT_COLOR};
-                color: {TEXT_COLOR};
-                border: none;
-                border-radius: 14px;
-                font-size: 16px;
-                font-weight: bold;
-                font-family: 'Arial';
-                min-width: 28px;
-                min-height: 28px;
-                padding: 0px;
-                margin: 0px;
-            }}
-            QToolButton:hover {{
-                background-color: {ACCENT_COLOR};
-            }}
-        """)
-        self.historyButton.clicked.connect(self.showTransferHistory)
-        self.historyButton.installEventFilter(self)
-        
-        # 获取本机IP地址和端口
-        self.local_ip = "正在获取..."
-        self.service_port = 45679  # 默认端口
-        
-        # 更新鼠标悬停提示信息
-        self.infoButton.installEventFilter(self)
-        
-        # 布局标题栏，添加历史记录按钮和信息按钮
-        titleBarLayout.addStretch()
-        titleBarLayout.addWidget(self.historyButton)
-        # 添加小间距
-        spacer = QSpacerItem(5, 0, QSizePolicy.Fixed, QSizePolicy.Minimum)
-        titleBarLayout.addSpacerItem(spacer)
-        titleBarLayout.addWidget(self.infoButton)
-        
-        # 添加标题栏到内容布局的顶部
-        contentLayout.addWidget(titleBarWidget)
-        
         # 添加动态标志
         logoContainer = QWidget()
         logoLayout = QVBoxLayout(logoContainer)
@@ -1142,124 +963,8 @@ class ReceivePanel(QWidget):
         self.onButton.toggled.connect(self.onSwitchToggled)
         self.offButton.toggled.connect(self.onSwitchToggled)
         
-        # 获取本机IP地址
-        self.update_local_ip()
-        
         # 测试状态面板显示 - 开发时使用
         # QTimer.singleShot(1000, self.simulateReceive)
-    
-    def eventFilter(self, obj, event):
-        """事件过滤器，用于更新鼠标悬停的信息按钮提示"""
-        from PyQt5.QtCore import QEvent
-        import platform
-        
-        if obj == self.infoButton:
-            if event.type() == QEvent.Enter:
-                # 获取系统主机名
-                hostname = platform.node()
-                
-                # 构建美观的HTML格式设备信息提示
-                tooltip_html = f"""
-                <div style='margin: 0px; padding: 5px;'>
-                    <div style='color: {SECONDARY_TEXT_COLOR};'>设备名称</div>
-                    <div style='color: {TEXT_COLOR}; margin-bottom: 10px;'><b>{self.device_name}</b></div>
-                    
-                    <div style='color: {SECONDARY_TEXT_COLOR};'>计算机名称</div>
-                    <div style='color: {TEXT_COLOR}; margin-bottom: 10px;'><b>{hostname}</b></div>
-                    
-                    <div style='color: {SECONDARY_TEXT_COLOR};'>IP地址</div>
-                    <div style='color: {TEXT_COLOR}; margin-bottom: 10px;'><b>{self.local_ip}</b></div>
-                    
-                    <div style='color: {SECONDARY_TEXT_COLOR};'>端口</div>
-                    <div style='color: {TEXT_COLOR};'><b>{self.service_port}</b></div>
-                </div>
-                """
-                
-                # 获取按钮在屏幕上的位置
-                button_pos = self.infoButton.mapToGlobal(self.infoButton.rect().topLeft())
-                
-                # 获取主窗口的几何信息，确保tooltip在窗口内显示
-                main_window = self.window()
-                window_rect = main_window.geometry()
-                
-                # 计算tooltip的合适位置
-                tooltip_pos = button_pos
-                
-                # 将tooltip向左移动，确保在窗口内
-                tooltip_pos.setX(min(tooltip_pos.x(), window_rect.right() - 250))  # 假设tooltip宽度约为250
-                
-                # 确保tooltip在窗口高度范围内
-                if tooltip_pos.y() + 200 > window_rect.bottom():  # 假设tooltip高度约为200
-                    tooltip_pos.setY(window_rect.bottom() - 200)
-                
-                # 强制显示自定义工具提示在计算好的位置
-                QToolTip.showText(tooltip_pos, tooltip_html, self.infoButton)
-                return True
-            # 防止其他事件处理器隐藏我们的工具提示
-            elif event.type() == QEvent.Leave:
-                # 当鼠标离开按钮区域时，不立即隐藏提示，让QToolTip自然消失
-                pass
-                
-        elif obj == self.historyButton:
-            if event.type() == QEvent.Enter:
-                # 构建美观的HTML格式历史记录提示
-                tooltip_html = f"""
-                <div style='margin: 0px; padding: 5px;'>
-                    <div style='color: {TEXT_COLOR}; font-size: 14px;'><b>传输历史记录</b></div>
-                    <div style='color: {SECONDARY_TEXT_COLOR};'>查看接收文件的历史记录</div>
-                </div>
-                """
-                
-                # 获取按钮在屏幕上的位置
-                button_pos = self.historyButton.mapToGlobal(self.historyButton.rect().topLeft())
-                
-                # 获取主窗口的几何信息，确保tooltip在窗口内显示
-                main_window = self.window()
-                window_rect = main_window.geometry()
-                
-                # 计算tooltip的合适位置
-                tooltip_pos = button_pos
-                
-                # 将tooltip向左移动，确保在窗口内
-                tooltip_pos.setX(min(tooltip_pos.x(), window_rect.right() - 250))
-                
-                # 确保tooltip在窗口高度范围内
-                if tooltip_pos.y() + 100 > window_rect.bottom():
-                    tooltip_pos.setY(window_rect.bottom() - 100)
-                
-                # 强制显示自定义工具提示在计算好的位置
-                QToolTip.showText(tooltip_pos, tooltip_html, self.historyButton)
-                return True
-        
-        return super().eventFilter(obj, event)
-    
-    def update_local_ip(self):
-        """更新本机IP地址"""
-        import socket
-        try:
-            # 创建一个临时套接字连接到互联网，获取本机IP
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            # 使用一个公共DNS服务器作为目标
-            s.connect(("8.8.8.8", 80))
-            self.local_ip = s.getsockname()[0]
-            s.close()
-        except:
-            # 如果无法连接外网，尝试获取本地IP
-            try:
-                # 尝试获取所有网络接口
-                hostname = socket.gethostname()
-                addresses = socket.getaddrinfo(hostname, None)
-                
-                # 过滤出IPv4地址，排除localhost地址
-                ip_list = [addr[4][0] for addr in addresses 
-                          if addr[0] == socket.AF_INET and not addr[4][0].startswith('127.')]
-                
-                if ip_list:
-                    self.local_ip = ip_list[0]  # 使用第一个非localhost的IPv4地址
-                else:
-                    self.local_ip = socket.gethostbyname(hostname)
-            except:
-                self.local_ip = "未知"
     
     def simulateReceive(self):
         """模拟接收文件，用于开发测试"""
@@ -1297,44 +1002,6 @@ class ReceivePanel(QWidget):
         # 使用淡出动画重置状态面板
         if self.statusPanel.isVisible():
             self.statusPanel.fadeOutAndReset()
-    
-    def showTransferHistory(self):
-        """显示传输历史记录对话框"""
-        dialog = TransferHistoryDialog(self)
-        dialog.exec_()
-    
-    def saveTransferHistory(self, sender_name, file_name, file_path):
-        """保存传输记录到历史文件"""
-        import time
-        
-        # 获取当前时间字符串
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        
-        # 历史记录文件路径
-        history_file = os.path.join(os.path.expanduser("~"), ".sendnow_history")
-        
-        # 写入记录
-        try:
-            with open(history_file, "a") as f:
-                f.write(f"{timestamp}|{sender_name}|{file_name}|{file_path}\n")
-        except:
-            # 忽略文件写入错误
-            pass
-    
-    def create_history_icon(self):
-        """创建历史记录图标，如果不存在"""
-        history_icon_path = "icons/history.svg"
-        os.makedirs("icons", exist_ok=True)
-        
-        if not os.path.exists(history_icon_path):
-            # 简单的历史记录SVG图标 - 白色
-            history_svg = """<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"></circle>
-                <polyline points="12 6 12 12 16 14"></polyline>
-            </svg>"""
-            
-            with open(history_icon_path, 'w') as f:
-                f.write(history_svg)
 
 class SendPanel(QWidget):
     """发送文件界面"""
@@ -1847,471 +1514,6 @@ class SettingsPanel(QWidget):
         # 实际实现在 SendNowApp.on_browse_save_dir 中，避免重复打开文件对话框
         pass
 
-class TransferHistoryItem(QWidget):
-    """传输历史记录项组件"""
-    
-    # 信号定义
-    openFileClicked = pyqtSignal(str)  # 打开文件信号
-    openFolderClicked = pyqtSignal(str)  # 打开文件夹信号
-    deleteClicked = pyqtSignal(QListWidgetItem)  # 删除记录信号
-    
-    def __init__(self, timestamp, sender_name, file_name, file_path, parent=None):
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(5, 8, 5, 8)
-        layout.setSpacing(4)  # 增加行距以提高可读性
-        
-        # 顶部布局：发送时间、发送方和删除按钮
-        topLayout = QHBoxLayout()
-        topLayout.setSpacing(5)
-        
-        # 时间和发送方标签
-        self.timeLabel = QLabel(timestamp)
-        self.timeLabel.setStyleSheet(f"color: {SECONDARY_TEXT_COLOR}; font-size: 12px;")
-        
-        self.senderLabel = QLabel(f"从 {sender_name}")
-        self.senderLabel.setStyleSheet(f"color: {SECONDARY_TEXT_COLOR}; font-size: 12px;")
-        
-        # 删除按钮
-        self.deleteButton = QPushButton()
-        self.deleteButton.setIcon(QIcon("icons/trash.svg"))
-        self.deleteButton.setIconSize(QSize(16, 16))
-        self.deleteButton.setFixedSize(24, 24)
-        self.deleteButton.setCursor(Qt.PointingHandCursor)
-        self.deleteButton.setStyleSheet(f"""
-            QPushButton {{
-                background-color: transparent;
-                border: none;
-                border-radius: 12px;
-                padding: 3px;
-                color: white;
-            }}
-            QPushButton:hover {{
-                background-color: rgba(255, 255, 255, 0.1);
-            }}
-            QPushButton:pressed {{
-                background-color: rgba(255, 255, 255, 0.05);
-            }}
-        """)
-        self.deleteButton.clicked.connect(self.onDeleteClicked)
-        
-        # 添加到顶部布局
-        topLayout.addWidget(self.timeLabel)
-        topLayout.addWidget(self.senderLabel)
-        topLayout.addStretch()
-        topLayout.addWidget(self.deleteButton, 0, Qt.AlignRight)
-        
-        # 文件名标签
-        self.fileLabel = QLabel(file_name)
-        self.fileLabel.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px; font-weight: bold;")
-        
-        # 文件路径标签
-        self.pathLabel = QLabel(file_path)
-        self.pathLabel.setStyleSheet(f"color: {SECONDARY_TEXT_COLOR}; font-size: 11px;")
-        self.pathLabel.setWordWrap(True)
-        self.pathLabel.setTextInteractionFlags(Qt.TextSelectableByMouse)  # 允许用户选择文本
-        
-        # 底部操作按钮
-        actionsLayout = QHBoxLayout()
-        actionsLayout.setSpacing(10)
-        
-        # 打开文件按钮
-        self.openFileButton = QPushButton("打开文件")
-        self.openFileButton.setCursor(Qt.PointingHandCursor)
-        self.openFileButton.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {BUTTON_BG};
-                color: {TEXT_COLOR};
-                border: none;
-                border-radius: 4px;
-                padding: 5px 10px;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {BUTTON_HOVER};
-            }}
-            QPushButton:pressed {{
-                background-color: {QColor(BUTTON_BG).darker(110).name()};
-            }}
-        """)
-        self.openFileButton.clicked.connect(lambda: self.openFileClicked.emit(file_path))
-        
-        # 打开文件夹按钮
-        self.openFolderButton = QPushButton("打开文件夹")
-        self.openFolderButton.setCursor(Qt.PointingHandCursor)
-        self.openFolderButton.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {BUTTON_BG};
-                color: {TEXT_COLOR};
-                border: none;
-                border-radius: 4px;
-                padding: 5px 10px;
-                font-size: 12px;
-            }}
-            QPushButton:hover {{
-                background-color: {BUTTON_HOVER};
-            }}
-            QPushButton:pressed {{
-                background-color: {QColor(BUTTON_BG).darker(110).name()};
-            }}
-        """)
-        folder_path = os.path.dirname(file_path)
-        self.openFolderButton.clicked.connect(lambda: self.openFolderClicked.emit(folder_path))
-        
-        # 添加到操作布局
-        actionsLayout.addWidget(self.openFileButton)
-        actionsLayout.addWidget(self.openFolderButton)
-        actionsLayout.addStretch()
-        
-        # 添加到主布局
-        layout.addLayout(topLayout)
-        layout.addWidget(self.fileLabel)
-        layout.addWidget(self.pathLabel)
-        layout.addLayout(actionsLayout)
-        
-        # 保存文件路径
-        self.file_path = file_path
-        
-        # 设置整个部件的样式
-        self.setStyleSheet(f"""
-            background-color: transparent;
-        """)
-    
-    def onDeleteClicked(self):
-        """删除按钮被点击"""
-        list_item = self.property("list_item")
-        if list_item:
-            self.deleteClicked.emit(list_item)
-
-class TransferHistoryDialog(QDialog):
-    """传输历史记录对话框"""
-    
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("传输历史")
-        self.setMinimumSize(600, 400)
-        self.resize(700, 500)
-        
-        # 设置窗口风格
-        self.setStyleSheet(f"""
-            QDialog {{
-                background-color: {MAIN_BG};
-                border: none;
-            }}
-        """)
-        
-        # 创建主布局
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        
-        # 创建标题栏
-        titleLayout = QHBoxLayout()
-        titleLayout.setContentsMargins(0, 0, 0, 10)
-        
-        # 标题
-        titleLabel = QLabel("传输历史记录")
-        titleLabel.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 20px; font-weight: bold;")
-        
-        # 清除全部按钮
-        self.clearAllButton = QPushButton("清除全部")
-        self.clearAllButton.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {BUTTON_BG};
-                color: {TEXT_COLOR};
-                border: none;
-                border-radius: 4px;
-                padding: 5px 10px;
-                font-size: 13px;
-            }}
-            QPushButton:hover {{
-                background-color: #E55050;
-                color: white;
-            }}
-            QPushButton:pressed {{
-                background-color: #D44040;
-            }}
-            QPushButton:disabled {{
-                background-color: {BUTTON_BG};
-                color: {SECONDARY_TEXT_COLOR};
-                opacity: 0.6;
-            }}
-        """)
-        self.clearAllButton.clicked.connect(self.clearAllHistory)
-        
-        # 添加到标题布局
-        titleLayout.addWidget(titleLabel)
-        titleLayout.addStretch()
-        titleLayout.addWidget(self.clearAllButton)
-        
-        # 创建历史记录列表
-        self.historyList = QListWidget()
-        self.historyList.setStyleSheet(f"""
-            QListWidget {{
-                background-color: {PANEL_BG};
-                border: none;
-                border-radius: 8px;
-                padding: 5px;
-            }}
-            QListWidget::item {{
-                background-color: {LIST_ITEM_BG};
-                border-radius: 6px;
-                margin: 3px 0px;
-                padding: 0px;
-                color: {TEXT_COLOR};
-            }}
-            QListWidget::item:hover {{
-                background-color: {QColor(LIST_ITEM_BG).lighter(115).name()};
-            }}
-            QListWidget::item:selected {{
-                background-color: {QColor(HIGHLIGHT_COLOR).darker(120).name()};
-                color: {TEXT_COLOR};
-                border: none;
-                font-weight: bold;
-            }}
-        """)
-        
-        # 设置空列表提示
-        self.historyList.setPlaceholderText = lambda text: setattr(self.historyList, 'placeholder_text', text)
-        self.historyList.setPlaceholderText("暂无传输历史记录")
-        
-        # 重写绘制事件以显示空列表提示
-        original_paint_event = self.historyList.paintEvent
-        def custom_paint_event(event):
-            original_paint_event(event)
-            # 当列表为空时显示占位文本
-            if self.historyList.count() == 0 and hasattr(self.historyList, 'placeholder_text'):
-                painter = QPainter(self.historyList.viewport())
-                painter.setRenderHint(QPainter.Antialiasing)
-                
-                # 设置字体和颜色
-                font = painter.font()
-                font.setPointSize(15)
-                font.setBold(True)
-                painter.setFont(font)
-                
-                # 使用半透明颜色
-                placeholderColor = QColor(SECONDARY_TEXT_COLOR)
-                placeholderColor.setAlpha(180)
-                painter.setPen(placeholderColor)
-                
-                # 绘制文本
-                painter.drawText(
-                    self.historyList.viewport().rect(),
-                    Qt.AlignCenter,
-                    self.historyList.placeholder_text
-                )
-        
-        self.historyList.paintEvent = custom_paint_event
-        
-        # 加载历史记录数据
-        self.loadHistoryData()
-        
-        # 添加到主布局
-        layout.addLayout(titleLayout)
-        layout.addWidget(self.historyList)
-        
-        # 创建关闭按钮
-        self.closeButton = QPushButton("关闭")
-        self.closeButton.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {HIGHLIGHT_COLOR};
-                color: {TEXT_COLOR};
-                border: none;
-                padding: 8px 20px;
-                border-radius: 5px;
-                font-size: 14px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{
-                background-color: {QColor(HIGHLIGHT_COLOR).lighter(115).name()};
-            }}
-            QPushButton:pressed {{
-                background-color: {QColor(HIGHLIGHT_COLOR).darker(110).name()};
-            }}
-        """)
-        self.closeButton.clicked.connect(self.close)
-        
-        # 添加关闭按钮，居中对齐
-        closeLayout = QHBoxLayout()
-        closeLayout.addStretch()
-        closeLayout.addWidget(self.closeButton)
-        closeLayout.addStretch()
-        layout.addLayout(closeLayout)
-    
-    def loadHistoryData(self):
-        """加载历史记录数据"""
-        # 清空列表
-        self.historyList.clear()
-        
-        # 加载历史记录数据
-        history_file = os.path.join(os.path.expanduser("~"), ".sendnow_history")
-        history_data = []
-        
-        try:
-            if os.path.exists(history_file):
-                with open(history_file, "r") as f:
-                    for line in f:
-                        try:
-                            # 解析历史数据行
-                            # 格式: timestamp|sender_name|file_name|file_path
-                            data = line.strip().split("|")
-                            if len(data) >= 4:
-                                history_data.append({
-                                    "timestamp": data[0],
-                                    "sender_name": data[1],
-                                    "file_name": data[2],
-                                    "file_path": data[3]
-                                })
-                        except:
-                            # 忽略解析错误的行
-                            pass
-        except:
-            # 如果文件读取出错，使用空列表
-            history_data = []
-        
-        # 按时间倒序排序（最新的记录在最前面）
-        history_data.sort(key=lambda x: x["timestamp"], reverse=True)
-        
-        # 添加历史记录到列表
-        for data in history_data:
-            self.addHistoryItem(
-                data["timestamp"],
-                data["sender_name"],
-                data["file_name"],
-                data["file_path"]
-            )
-        
-        # 更新清除全部按钮状态
-        self.clearAllButton.setEnabled(len(history_data) > 0)
-    
-    def addHistoryItem(self, timestamp, sender_name, file_name, file_path):
-        """添加历史记录项到列表"""
-        # 创建列表项
-        item = QListWidgetItem(self.historyList)
-        
-        # 创建自定义部件
-        history_item = TransferHistoryItem(timestamp, sender_name, file_name, file_path)
-        history_item.setProperty("list_item", item)
-        history_item.deleteClicked.connect(self.removeHistoryItem)
-        history_item.openFileClicked.connect(self.openFile)
-        history_item.openFolderClicked.connect(self.openFolder)
-        
-        # 设置列表项尺寸
-        item.setSizeHint(history_item.sizeHint())
-        
-        # 将自定义部件添加到列表项
-        self.historyList.addItem(item)
-        self.historyList.setItemWidget(item, history_item)
-    
-    def removeHistoryItem(self, item):
-        """从列表和历史记录文件中删除记录项"""
-        row = self.historyList.row(item)
-        if row >= 0:
-            # 获取该项的信息
-            widget = self.historyList.itemWidget(item)
-            file_path = widget.file_path
-            
-            # 从列表中移除
-            self.historyList.takeItem(row)
-            
-            # 从历史记录文件中移除
-            self.removeFromHistoryFile(file_path)
-            
-            # 更新清除全部按钮状态
-            self.clearAllButton.setEnabled(self.historyList.count() > 0)
-    
-    def removeFromHistoryFile(self, file_path):
-        """从历史记录文件中移除特定路径的记录"""
-        history_file = os.path.join(os.path.expanduser("~"), ".sendnow_history")
-        
-        try:
-            if os.path.exists(history_file):
-                # 读取所有记录
-                with open(history_file, "r") as f:
-                    lines = f.readlines()
-                
-                # 移除匹配的记录
-                new_lines = [line for line in lines if file_path not in line]
-                
-                # 写回文件
-                with open(history_file, "w") as f:
-                    f.writelines(new_lines)
-        except:
-            # 忽略文件操作错误
-            pass
-    
-    def clearAllHistory(self):
-        """清除所有历史记录"""
-        # 弹出确认对话框
-        from PyQt5.QtWidgets import QMessageBox
-        confirm = QMessageBox.question(
-            self, 
-            "确认清除",
-            "确定要清除所有传输历史记录吗？此操作不可撤销。",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No
-        )
-        
-        if confirm == QMessageBox.Yes:
-            # 清空列表
-            self.historyList.clear()
-            
-            # 删除历史记录文件
-            history_file = os.path.join(os.path.expanduser("~"), ".sendnow_history")
-            try:
-                if os.path.exists(history_file):
-                    os.remove(history_file)
-            except:
-                # 忽略文件删除错误
-                pass
-            
-            # 禁用清除全部按钮
-            self.clearAllButton.setEnabled(False)
-    
-    def openFile(self, file_path):
-        """打开文件"""
-        import platform
-        import subprocess
-        
-        try:
-            if platform.system() == 'Windows':
-                os.startfile(file_path)
-            elif platform.system() == 'Darwin':  # macOS
-                subprocess.run(['open', file_path], check=True)
-            else:  # Linux
-                subprocess.run(['xdg-open', file_path], check=True)
-        except:
-            # 如果打开失败，显示错误信息
-            from PyQt5.QtWidgets import QMessageBox
-            QMessageBox.warning(
-                self,
-                "打开失败",
-                f"无法打开文件: {file_path}\n文件可能已被移动或删除。",
-                QMessageBox.Ok
-            )
-    
-    def openFolder(self, folder_path):
-        """打开文件夹"""
-        import platform
-        import subprocess
-        
-        try:
-            if platform.system() == 'Windows':
-                os.startfile(folder_path)
-            elif platform.system() == 'Darwin':  # macOS
-                subprocess.run(['open', folder_path], check=True)
-            else:  # Linux
-                subprocess.run(['xdg-open', folder_path], check=True)
-        except:
-            # 如果打开失败，显示错误信息
-            from PyQt5.QtWidgets import QMessageBox
-            QMessageBox.warning(
-                self,
-                "打开失败",
-                f"无法打开文件夹: {folder_path}\n文件夹可能已被移动或删除。",
-                QMessageBox.Ok
-            )
-
 class MainWindow(QMainWindow):
     """主窗口"""
     
@@ -2328,10 +1530,6 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("SendNow")  # 修改窗口标题
         self.setMinimumSize(900, 600)  # 最小窗口尺寸
         self.resize(self.DEFAULT_WIDTH, self.DEFAULT_HEIGHT)  # 设置默认大小
-        
-        # 设置应用程序图标
-        app_icon = QIcon("icons/sendnow_logo.svg")
-        self.setWindowIcon(app_icon)
         
         # 设置应用风格
         self.setStyleSheet(f"""
@@ -2442,9 +1640,6 @@ class MainWindow(QMainWindow):
     def onNavButtonClicked(self, button):
         """处理导航按钮点击事件"""
         if button == self.receiveButton:
-            # 在显示接收面板前更新IP地址信息
-            self.receivePanel.update_local_ip()
-            # 注意：正确的端口信息会在SendNowApp初始化时设置
             self.stack.setCurrentWidget(self.receivePanel)
         elif button == self.sendButton:
             self.stack.setCurrentWidget(self.sendPanel)
@@ -2473,11 +1668,6 @@ class MainWindow(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    
-    # 设置应用程序图标
-    app_icon = QIcon("icons/sendnow_logo.svg")
-    app.setWindowIcon(app_icon)
-    
     window = MainWindow()
     window.show()
     sys.exit(app.exec_()) 
