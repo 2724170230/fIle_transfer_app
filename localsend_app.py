@@ -525,6 +525,8 @@ class SendNowApp(MainWindow):
             self.transfer_server.stop()
             # 停止Logo动画
             self.receivePanel.logoWidget.setActive(False)
+            # 重置状态面板（带淡出效果）
+            self.receivePanel.resetStatusPanel()
     
     def on_device_selected(self, item):
         """处理设备列表项选择事件"""

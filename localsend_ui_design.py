@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QProgressBar, QListWidget, QListWidgetItem, QStackedWidget, 
                              QFrame, QSplitter, QGridLayout, QSpacerItem, QSizePolicy,
                              QButtonGroup, QToolButton, QAction)
-from PyQt5.QtCore import Qt, QSize, pyqtSignal, QMimeData, QUrl, QTimer, QRect, QPoint, QPointF
+from PyQt5.QtCore import Qt, QSize, pyqtSignal, QMimeData, QUrl, QTimer, QRect, QPoint, QPointF, QPropertyAnimation, QEasingCurve
 from PyQt5.QtGui import QIcon, QColor, QPalette, QFont, QDrag, QPainter, QPen, QBrush, QPainterPath, QRadialGradient, QLinearGradient, QTransform
 
 # 更高对比度的赛博朋克风格色调
@@ -580,16 +580,52 @@ class StatusPanel(QWidget):
         
         self.actionsWidget.setVisible(False)
         
+        # 完成按钮（初始隐藏）
+        self.completeButtonWidget = QWidget()
+        completeButtonLayout = QHBoxLayout(self.completeButtonWidget)
+        completeButtonLayout.setAlignment(Qt.AlignCenter)
+        
+        self.completeButton = QPushButton("完成")
+        self.completeButton.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {HIGHLIGHT_COLOR};
+                color: {TEXT_COLOR};
+                border: none;
+                padding: 8px 20px;
+                border-radius: 4px;
+                font-size: 14px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {QColor(HIGHLIGHT_COLOR).lighter(115).name()};
+            }}
+            QPushButton:pressed {{
+                background-color: {QColor(HIGHLIGHT_COLOR).darker(110).name()};
+            }}
+        """)
+        self.completeButton.clicked.connect(self.fadeOutAndReset)
+        completeButtonLayout.addWidget(self.completeButton)
+        self.completeButtonWidget.setVisible(False)
+        
         # 添加到主布局
         layout.addStretch()
         layout.addWidget(self.statusLabel)
         layout.addWidget(self.progressBar)
         layout.addWidget(self.actionsWidget)
+        layout.addWidget(self.completeButtonWidget)
         layout.addStretch()
         
         # 初始隐藏状态文本和进度条
         self.statusLabel.setVisible(False)
         self.progressBar.setVisible(False)
+        
+        # 为淡出效果准备的属性动画
+        self.fadeAnimation = QPropertyAnimation(self, b"windowOpacity")
+        self.fadeAnimation.setDuration(500)  # 500毫秒的动画时间
+        self.fadeAnimation.setStartValue(1.0)
+        self.fadeAnimation.setEndValue(0.0)
+        self.fadeAnimation.setEasingCurve(QEasingCurve.OutQuad)
+        self.fadeAnimation.finished.connect(self.onFadeOutFinished)
     
     def showProgress(self, file_name=None, mode="receive"):
         """显示进度条和状态
@@ -598,9 +634,13 @@ class StatusPanel(QWidget):
             file_name: 文件名
             mode: 模式，可选值为 "receive"(接收) 或 "send"(发送)
         """
+        # 重置透明度
+        self.setWindowOpacity(1.0)
+        
         self.statusLabel.setVisible(True)
         self.progressBar.setVisible(True)
         self.actionsWidget.setVisible(False)
+        self.completeButtonWidget.setVisible(False)
         self.setVisible(True)
         
         if file_name:
@@ -617,12 +657,27 @@ class StatusPanel(QWidget):
             self.statusLabel.setText(f"已接收：{file_name}")
         self.progressBar.setValue(100)
         self.actionsWidget.setVisible(mode == "receive")  # 只在接收模式下显示操作按钮
+        
+        # 在接收模式下显示完成按钮
+        if mode == "receive":
+            self.completeButtonWidget.setVisible(True)
+    
+    def fadeOutAndReset(self):
+        """开始淡出动画效果"""
+        self.fadeAnimation.start()
+    
+    def onFadeOutFinished(self):
+        """淡出动画完成后重置状态"""
+        self.reset()
+        # 恢复透明度，以备下次显示
+        self.setWindowOpacity(1.0)
     
     def reset(self):
         """重置状态面板"""
         self.statusLabel.setVisible(False)
         self.progressBar.setVisible(False)
         self.actionsWidget.setVisible(False)
+        self.completeButtonWidget.setVisible(False)
         self.progressBar.setValue(0)
         self.setVisible(False)
 
@@ -808,7 +863,7 @@ class ReceivePanel(QWidget):
                 border-bottom-right-radius: 15px;
             }}
             QPushButton:checked {{
-                background-color: {HIGHLIGHT_COLOR};
+                background-color: {QColor(HIGHLIGHT_COLOR).darker(130).name()};
                 color: {TEXT_COLOR};
             }}
         """
@@ -816,86 +871,109 @@ class ReceivePanel(QWidget):
         self.onButton.setStyleSheet(on_button_style)
         self.offButton.setStyleSheet(off_button_style)
         
-        # 创建按钮组使它们互斥
-        self.buttonGroup = QButtonGroup(self)
-        self.buttonGroup.addButton(self.onButton)
-        self.buttonGroup.addButton(self.offButton)
-        self.buttonGroup.setExclusive(True)
+        # 创建按钮组，确保只有一个按钮被选中
+        buttonGroup = QButtonGroup(self)
+        buttonGroup.addButton(self.onButton)
+        buttonGroup.addButton(self.offButton)
+        buttonGroup.setExclusive(True)  # 确保互斥
         
-        # 添加到布局
+        # 将按钮添加到开关布局
         switchLayout.addWidget(self.onButton)
         switchLayout.addWidget(self.offButton)
         
-        # 默认选中开启
+        # 默认选择"开"按钮
         self.onButton.setChecked(True)
         
-        # 连接按钮事件
-        self.onButton.toggled.connect(self.onSwitchToggled)
-        self.offButton.toggled.connect(self.onSwitchToggled)
+        # 添加开关及状态文字
+        switchAreaWidget = QWidget()
+        switchAreaLayout = QVBoxLayout(switchAreaWidget)
+        switchAreaLayout.setContentsMargins(0, 0, 0, 0)
         
-        # 状态面板
+        # 状态文字
+        statusLayout = QHBoxLayout()
+        statusLayout.setContentsMargins(0, 5, 0, 0)
+        
+        self.statusLabel = QLabel("设备已可被发现")
+        self.statusLabel.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 15px;")
+        self.statusLabel.setAlignment(Qt.AlignCenter)
+        
+        statusLayout.addStretch()
+        statusLayout.addWidget(self.statusLabel)
+        statusLayout.addStretch()
+        
+        # 添加到开关区域布局
+        switchAreaLayout.addWidget(self.switchWidget, 0, Qt.AlignCenter)
+        switchAreaLayout.addLayout(statusLayout)
+        
+        # 状态面板（初始隐藏）
         self.statusPanel = StatusPanel()
+        self.statusPanel.setVisible(False)
         
-        # 添加到内容布局
-        contentLayout.addWidget(self.logoWidget, 0, Qt.AlignCenter)
+        # 设置主布局
+        contentLayout.addWidget(self.logoWidget, 0, Qt.AlignCenter)  # 居中显示标志
         contentLayout.addWidget(titleLabel)
         contentLayout.addWidget(deviceIdLabel)
-        contentLayout.addWidget(self.switchWidget, 0, Qt.AlignCenter)
-        contentLayout.addWidget(self.statusPanel)
+        contentLayout.addSpacing(10)  # 在标题和开关之间添加额外空间
+        contentLayout.addWidget(switchAreaWidget)
+        contentLayout.addStretch(1)  # 添加弹性空间
         
         # 设置内容容器样式
         contentWidget.setStyleSheet(f"""
             background-color: {PANEL_BG};
             border-radius: 12px;
-            border: none;
-            box-shadow: 0px 3px 10px rgba(0, 0, 0, 0.2);
+            margin: 5px;
         """)
         
         # 添加到主布局
         layout.addWidget(contentWidget)
+        layout.addWidget(self.statusPanel)  # 状态面板添加到主窗口
         
-        # 模拟接收测试按钮 (仅开发调试用)
-        self.testButton = QPushButton("模拟接收文件 (测试)")
-        self.testButton.setStyleSheet(f"""
-            QPushButton {{
-                background-color: #555555;
-                color: white;
-                border: none;
-                padding: 5px 10px;
-                border-radius: 3px;
-                font-size: 12px;
-            }}
-        """)
-        self.testButton.clicked.connect(self.simulateReceive)
-        layout.addWidget(self.testButton, 0, Qt.AlignRight)
+        # 设置整体样式
+        self.setStyleSheet(f"background-color: {MAIN_BG};")
+        
+        # 连接开关信号
+        self.onButton.toggled.connect(self.onSwitchToggled)
+        self.offButton.toggled.connect(self.onSwitchToggled)
+        
+        # 测试状态面板显示 - 开发时使用
+        # QTimer.singleShot(1000, self.simulateReceive)
     
     def simulateReceive(self):
-        """模拟接收文件过程"""
-        self.statusPanel.showProgress("document.pdf")
+        """模拟接收文件，用于开发测试"""
+        self.statusPanel.showProgress("测试文件.pdf")
         
-        # 创建一个模拟进度计时器
-        self.progress_timer = QTimer(self)
-        self.progress_value = 0
+        progress = 0
         
+        # 模拟进度更新
         def updateProgress():
-            self.progress_value += 5
-            self.statusPanel.progressBar.setValue(self.progress_value)
-            
-            if self.progress_value >= 100:
-                self.progress_timer.stop()
-                self.statusPanel.showCompleted("document.pdf")
+            nonlocal progress
+            progress += 5
+            self.statusPanel.progressBar.setValue(progress)
+            if progress >= 100:
+                self.statusPanel.showCompleted("测试文件.pdf")
+                return
+            QTimer.singleShot(100, updateProgress)
         
-        self.progress_timer.timeout.connect(updateProgress)
-        self.progress_timer.start(200)  # 模拟网络延迟
-
+        QTimer.singleShot(200, updateProgress)
+    
     def onSwitchToggled(self, checked):
-        """处理开关按钮切换事件"""
-        if checked:
-            # 确定是哪个按钮被选中
-            if self.sender() == self.onButton:
-                self.logoWidget.setActive(True)
-            else:  # offButton
-                self.logoWidget.setActive(False)
+        """开关状态切换"""
+        sender = self.sender()
+        
+        if sender == self.onButton and checked:
+            self.statusLabel.setText("设备已可被发现")
+            self.logoWidget.setActive(True)
+        else:
+            self.statusLabel.setText("传输功能已关闭")
+            self.logoWidget.setActive(False)
+            # 重置状态面板
+            self.resetStatusPanel()
+    
+    def resetStatusPanel(self):
+        """重置状态面板，在切换到关闭状态或完成传输后调用"""
+        # 使用淡出动画重置状态面板
+        if self.statusPanel.isVisible():
+            self.statusPanel.fadeOutAndReset()
 
 class SendPanel(QWidget):
     """发送文件界面"""
