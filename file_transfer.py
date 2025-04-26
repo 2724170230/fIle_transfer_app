@@ -27,409 +27,413 @@ class FileTransferStatus:
     CANCELLED = "cancelled"
 
 class FileTransferServer(QObject):
-    """文件接收服务器"""
+    """文件传输服务器，用于接收客户端发送的文件"""
     
-    # 信号定义
-    statusChanged = pyqtSignal(str)                   # 状态改变
-    transferRequest = pyqtSignal(dict)                # 收到传输请求
-    transferProgress = pyqtSignal(str, int, int)      # 传输进度(文件名, 当前, 总大小)
-    transferComplete = pyqtSignal(str, str)           # 传输完成(文件名, 保存路径)
-    transferFailed = pyqtSignal(str, str)             # 传输失败(文件名, 错误信息)
+    # 定义信号
+    statusChanged = pyqtSignal(str)  # 状态变化信号
+    transferRequest = pyqtSignal(dict)  # 收到传输请求信号
+    transferProgress = pyqtSignal(str, int, int)  # 传输进度信号（文件名，当前字节数，总字节数）
+    transferComplete = pyqtSignal(str, str)  # 传输完成信号（文件名，保存路径）
+    transferFailed = pyqtSignal(str, str)  # 传输失败信号（文件名，错误信息）
+    pendingTransferRequest = pyqtSignal(dict, object)  # 等待用户确认的传输请求（文件信息，客户端套接字）
     
-    def __init__(self, save_dir=None, port=SERVICE_PORT):
+    def __init__(self, host='0.0.0.0', port=SERVICE_PORT):
         super().__init__()
-        
-        # 配置参数
+        self.host = host
         self.port = port
-        self.save_dir = save_dir or os.path.join(os.path.expanduser("~"), "Downloads")
+        self.server_socket = None
+        self.running = False
+        self.transfer_thread = None
+        self.save_dir = os.path.expanduser("~/Downloads/SendNow")
+        
+        # 待处理的传输请求
+        self.pending_requests = {}
         
         # 确保保存目录存在
         os.makedirs(self.save_dir, exist_ok=True)
-        
-        # 运行状态
-        self.is_running = False
-        self.server_socket = None
-        self.transfer_threads = []  # 活动传输线程列表
     
     def start(self):
-        """启动文件接收服务器"""
-        if self.is_running:
+        """启动文件传输服务器"""
+        if self.running:
             return
         
-        self.is_running = True
-        self.statusChanged.emit("正在启动文件接收服务...")
-        
-        # 启动服务器线程
-        self.server_thread = threading.Thread(target=self._server_loop, daemon=True)
-        self.server_thread.start()
-        
-        logger.info(f"文件接收服务已启动，监听端口: {self.port}")
-    
-    def stop(self):
-        """停止文件接收服务器"""
-        if not self.is_running:
-            return
-        
-        self.is_running = False
-        self.statusChanged.emit("正在停止文件接收服务...")
-        
-        # 关闭服务器套接字
-        if self.server_socket:
-            try:
-                self.server_socket.close()
-            except:
-                pass
-        
-        # 等待服务器线程结束
-        if hasattr(self, 'server_thread') and self.server_thread.is_alive():
-            self.server_thread.join(timeout=1.0)
-        
-        # 关闭所有传输线程
-        for thread in self.transfer_threads[:]:
-            if thread.is_alive():
-                thread.join(timeout=0.5)
-        
-        self.transfer_threads.clear()
-        self.statusChanged.emit("文件接收服务已停止")
-        logger.info("文件接收服务已停止")
-    
-    def set_save_directory(self, directory):
-        """设置文件保存目录"""
-        if os.path.isdir(directory):
-            self.save_dir = directory
-            os.makedirs(self.save_dir, exist_ok=True)
-            logger.info(f"文件保存目录已设置为: {self.save_dir}")
-            return True
-        return False
-    
-    def _server_loop(self):
-        """服务器监听循环"""
         try:
             # 创建服务器套接字
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.server_socket.bind(('', self.port))
+            self.server_socket.bind((self.host, self.port))
             self.server_socket.listen(5)
-            self.server_socket.settimeout(1.0)  # 设置超时，以便能够定期检查is_running标志
             
-            self.statusChanged.emit(f"文件接收服务已启动，端口: {self.port}")
+            # 设置运行标志
+            self.running = True
             
-            while self.is_running:
-                try:
-                    # 接受客户端连接
-                    client_socket, client_address = self.server_socket.accept()
-                    logger.info(f"收到来自 {client_address[0]} 的连接")
-                    
-                    # 创建新线程处理文件传输
-                    transfer_thread = threading.Thread(
-                        target=self._handle_client,
-                        args=(client_socket, client_address),
-                        daemon=True
-                    )
-                    self.transfer_threads.append(transfer_thread)
-                    transfer_thread.start()
-                    
-                    # 清理已结束的线程
-                    self._cleanup_threads()
-                
-                except socket.timeout:
-                    continue
-                except Exception as e:
-                    if self.is_running:  # 仅在运行状态记录错误
-                        logger.error(f"接受客户端连接时发生错误: {str(e)}")
+            # 启动服务器线程
+            self.transfer_thread = threading.Thread(target=self._server_loop, daemon=True)
+            self.transfer_thread.start()
+            
+            logger.info(f"文件传输服务器已启动 ({self.host}:{self.port})")
+            self.statusChanged.emit("服务器已启动")
         
         except Exception as e:
-            logger.error(f"文件接收服务器错误: {str(e)}")
-        finally:
-            # 确保套接字关闭
-            if self.server_socket:
-                try:
-                    self.server_socket.close()
-                except:
-                    pass
-            
-            logger.info("文件接收服务器线程已结束")
+            logger.error(f"启动文件传输服务器失败: {str(e)}")
+            self.statusChanged.emit(f"启动失败: {str(e)}")
     
-    def _cleanup_threads(self):
-        """清理已结束的传输线程"""
-        active_threads = []
-        for thread in self.transfer_threads:
-            if thread.is_alive():
-                active_threads.append(thread)
-        self.transfer_threads = active_threads
-    
-    def _handle_client(self, client_socket, client_address):
-        """处理客户端连接和文件传输"""
-        file_info = None
-        temp_file = None
-        total_received = 0
+    def stop(self):
+        """停止文件传输服务器"""
+        if not self.running:
+            return
+        
+        # 设置停止标志
+        self.running = False
         
         try:
-            # 设置超时
-            client_socket.settimeout(30.0)  # 30秒超时
+            # 关闭服务器套接字
+            if self.server_socket:
+                self.server_socket.close()
             
-            # 接收文件元数据
-            header_data = b""
-            while b"\n" not in header_data:
-                chunk = client_socket.recv(BUFFER_SIZE)
-                if not chunk:
-                    raise Exception("连接在接收元数据前关闭")
-                header_data += chunk
-                if len(header_data) > 10240:  # 限制头部大小为10KB
-                    raise Exception("元数据过大")
-            
-            # 分离头部和可能的文件数据部分
-            header_end = header_data.index(b"\n")
-            file_data = header_data[header_end + 1:]
-            header_data = header_data[:header_end]
-            
-            # 解析文件信息
-            file_info = json.loads(header_data.decode('utf-8'))
-            file_name = file_info.get('name', 'unknown_file')
-            file_size = int(file_info.get('size', 0))
-            file_hash = file_info.get('hash', '')
-            
-            logger.info(f"接收文件: {file_name} ({file_size} 字节)")
-            
-            # 触发传输请求信号
-            self.transferRequest.emit({
-                'name': file_name,
-                'size': file_size,
-                'sender': client_address[0]
-            })
-            
-            # 创建临时文件
-            temp_fd, temp_path = tempfile.mkstemp(prefix="sendnow_")
-            temp_file = os.fdopen(temp_fd, 'wb')
-            
-            # 写入已接收的数据
-            if file_data:
-                temp_file.write(file_data)
-                total_received = len(file_data)
-                self.transferProgress.emit(file_name, total_received, file_size)
-            
-            # 计算哈希值（用于校验）
-            hash_obj = hashlib.md5()
-            if file_data:
-                hash_obj.update(file_data)
-            
-            # 接收文件数据
-            last_progress_time = time.time()
-            while total_received < file_size:
-                # 接收数据块
-                chunk = client_socket.recv(BUFFER_SIZE)
-                if not chunk:
-                    break
-                
-                # 写入文件并更新计数
-                temp_file.write(chunk)
-                hash_obj.update(chunk)
-                total_received += len(chunk)
-                
-                # 更新进度（限制更新频率，避免信号过多）
-                current_time = time.time()
-                if current_time - last_progress_time >= 0.1 or total_received == file_size:
-                    self.transferProgress.emit(file_name, total_received, file_size)
-                    last_progress_time = current_time
-            
-            # 检查传输是否完成
-            if total_received < file_size:
-                raise Exception(f"文件传输不完整: 已接收 {total_received}/{file_size} 字节")
-            
-            # 关闭临时文件
-            temp_file.close()
-            temp_file = None
-            
-            # 验证文件哈希
-            calculated_hash = hash_obj.hexdigest()
-            if file_hash and calculated_hash != file_hash:
-                raise Exception(f"文件校验失败: 期望 {file_hash}, 实际 {calculated_hash}")
-            
-            # 移动到最终位置
-            file_path = os.path.join(self.save_dir, file_name)
-            # 如果文件已存在，添加序号
-            base_name, ext = os.path.splitext(file_name)
-            counter = 1
-            while os.path.exists(file_path):
-                file_path = os.path.join(self.save_dir, f"{base_name}_{counter}{ext}")
-                counter += 1
-            
-            os.rename(temp_path, file_path)
-            logger.info(f"文件保存成功: {file_path}")
-            
-            # 发送传输完成信号
-            self.transferComplete.emit(file_name, file_path)
-            
-            # 发送确认信息
-            response = {"status": "success", "message": "文件接收完成"}
-            client_socket.sendall(json.dumps(response).encode('utf-8') + b"\n")
+            logger.info("文件传输服务器已停止")
+            self.statusChanged.emit("服务器已停止")
         
         except Exception as e:
-            logger.error(f"文件接收错误: {str(e)}")
+            logger.error(f"停止文件传输服务器失败: {str(e)}")
+            self.statusChanged.emit(f"停止失败: {str(e)}")
+    
+    def set_save_directory(self, directory):
+        """设置文件保存目录"""
+        try:
+            # 确保目录存在
+            os.makedirs(directory, exist_ok=True)
+            
+            # 测试目录是否可写
+            test_file = os.path.join(directory, ".test_write")
+            with open(test_file, "w") as f:
+                f.write("test")
+            os.remove(test_file)
+            
+            # 设置保存目录
+            self.save_dir = directory
+            logger.info(f"文件保存目录已设置为: {directory}")
+            return True
+        
+        except Exception as e:
+            logger.error(f"设置保存目录失败: {str(e)}")
+            return False
+    
+    def _server_loop(self):
+        """服务器主循环，接受客户端连接并处理文件传输"""
+        while self.running:
+            try:
+                # 接受客户端连接
+                client_socket, client_address = self.server_socket.accept()
+                
+                # 处理传输请求
+                threading.Thread(
+                    target=self._handle_transfer_request,
+                    args=(client_socket, client_address),
+                    daemon=True
+                ).start()
+                
+            except Exception as e:
+                if self.running:  # 只在服务器正常运行时记录错误
+                    logger.error(f"接受客户端连接失败: {str(e)}")
+                    self.statusChanged.emit(f"连接失败: {str(e)}")
+                time.sleep(0.1)  # 避免CPU占用过高
+    
+    def _handle_transfer_request(self, client_socket, client_address):
+        """处理客户端的传输请求"""
+        try:
+            # 接收文件信息
+            info_data = client_socket.recv(4096)
+            if not info_data:
+                client_socket.close()
+                return
+            
+            # 解析文件信息
+            file_info = json.loads(info_data.decode('utf-8'))
+            file_info['sender'] = client_address[0]  # 添加发送者IP
+            
+            logger.info(f"收到文件传输请求: {file_info['name']} ({file_info['size']} 字节) 来自 {client_address[0]}")
+            
+            # 发送待确认的传输请求信号，等待用户确认
+            request_id = str(time.time())
+            self.pending_requests[request_id] = {
+                'file_info': file_info,
+                'client_socket': client_socket,
+                'client_address': client_address
+            }
+            
+            # 向UI发送信号，等待用户确认
+            self.pendingTransferRequest.emit(file_info, client_socket)
+            
+        except Exception as e:
+            logger.error(f"处理传输请求失败: {str(e)}")
+            try:
+                client_socket.close()
+            except:
+                pass
+    
+    def accept_transfer(self, client_socket, client_address, file_info, custom_save_dir=None):
+        """接受文件传输请求"""
+        # 向客户端发送接受响应
+        try:
+            response = {"status": "accepted"}
+            client_socket.sendall(json.dumps(response).encode('utf-8'))
+            
+            # 启动文件接收线程
+            save_dir = custom_save_dir if custom_save_dir else self.save_dir
+            threading.Thread(
+                target=self._handle_client,
+                args=(client_socket, client_address, file_info, save_dir),
+                daemon=True
+            ).start()
+            
+            logger.info(f"已接受文件传输请求: {file_info['name']}")
+            
+        except Exception as e:
+            logger.error(f"接受传输请求失败: {str(e)}")
+            try:
+                client_socket.close()
+            except:
+                pass
+    
+    def reject_transfer(self, client_socket):
+        """拒绝文件传输请求"""
+        try:
+            # 向客户端发送拒绝响应
+            response = {"status": "rejected", "reason": "User rejected the transfer"}
+            client_socket.sendall(json.dumps(response).encode('utf-8'))
+            client_socket.close()
+            
+            logger.info("已拒绝文件传输请求")
+            
+        except Exception as e:
+            logger.error(f"拒绝传输请求失败: {str(e)}")
+            try:
+                client_socket.close()
+            except:
+                pass
+    
+    def _handle_client(self, client_socket, client_address, file_info, save_dir):
+        """处理客户端连接，接收文件数据"""
+        filename = file_info['name']
+        file_size = file_info['size']
+        file_hash = file_info.get('hash', '')  # 可选的文件哈希值
+        
+        # 确保保存目录存在
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # 构建保存路径
+        save_path = os.path.join(save_dir, filename)
+        
+        # 如果文件已存在，添加数字后缀
+        base_name, ext = os.path.splitext(filename)
+        counter = 1
+        while os.path.exists(save_path):
+            new_name = f"{base_name}_{counter}{ext}"
+            save_path = os.path.join(save_dir, new_name)
+            counter += 1
+        
+        try:
+            # 发出传输请求信号
+            self.transferRequest.emit(file_info)
+            
+            # 接收文件数据
+            with open(save_path, 'wb') as f:
+                received = 0
+                hash_obj = hashlib.md5()
+                
+                while received < file_size:
+                    # 计算剩余字节数
+                    remaining = file_size - received
+                    chunk_size = min(8192, remaining)
+                    
+                    # 接收数据块
+                    chunk = client_socket.recv(chunk_size)
+                    if not chunk:
+                        raise Exception("连接中断")
+                    
+                    # 写入文件
+                    f.write(chunk)
+                    hash_obj.update(chunk)
+                    
+                    # 更新接收计数
+                    received += len(chunk)
+                    
+                    # 发送进度信号
+                    self.transferProgress.emit(filename, received, file_size)
+            
+            # 验证文件哈希值
+            received_hash = hash_obj.hexdigest()
+            if file_hash and received_hash != file_hash:
+                raise Exception(f"文件哈希值不匹配: 预期 {file_hash}，实际 {received_hash}")
+            
+            # 发送传输完成信号
+            logger.info(f"文件接收完成: {filename} -> {save_path}")
+            self.transferComplete.emit(filename, save_path)
+            
+            # 向客户端发送成功响应
+            response = {"status": "success", "message": "File received successfully"}
+            client_socket.sendall(json.dumps(response).encode('utf-8'))
+        
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"文件接收失败: {filename} - {error_msg}")
             
             # 发送传输失败信号
-            if file_info and 'name' in file_info:
-                self.transferFailed.emit(file_info['name'], str(e))
+            self.transferFailed.emit(filename, error_msg)
             
-            # 尝试发送错误响应
+            # 向客户端发送失败响应
             try:
-                response = {"status": "error", "message": str(e)}
-                client_socket.sendall(json.dumps(response).encode('utf-8') + b"\n")
+                response = {"status": "error", "message": error_msg}
+                client_socket.sendall(json.dumps(response).encode('utf-8'))
+            except:
+                pass
+            
+            # 删除不完整的文件
+            try:
+                if os.path.exists(save_path):
+                    os.remove(save_path)
             except:
                 pass
         
         finally:
-            # 清理资源
-            if temp_file:
-                try:
-                    temp_file.close()
-                except:
-                    pass
-            
-            # 关闭客户端套接字
+            # 关闭客户端连接
             try:
                 client_socket.close()
             except:
                 pass
 
 class FileTransferClient(QObject):
-    """文件发送客户端"""
+    """文件传输客户端，用于向服务器发送文件"""
     
-    # 信号定义
-    statusChanged = pyqtSignal(str)                   # 状态改变
-    transferProgress = pyqtSignal(str, int, int)      # 传输进度(文件名, 当前, 总大小)
-    transferComplete = pyqtSignal(str, str)           # 传输完成(文件名, 接收方响应)
-    transferFailed = pyqtSignal(str, str)             # 传输失败(文件名, 错误信息)
+    # 定义信号
+    statusChanged = pyqtSignal(str)  # 状态变化信号
+    transferProgress = pyqtSignal(str, int, int)  # 传输进度信号（文件名，当前字节数，总字节数）
+    transferComplete = pyqtSignal(str, dict)  # 传输完成信号（文件名，服务器响应）
+    transferFailed = pyqtSignal(str, str)  # 传输失败信号（文件名，错误信息）
     
     def __init__(self):
         super().__init__()
-        self.current_transfer = None  # 当前传输线程
+        self.client_socket = None
+        self.transfer_thread = None
     
-    def send_file(self, file_path, target_ip, target_port=SERVICE_PORT, timeout=30):
-        """发送文件到指定IP地址"""
+    def send_file(self, file_path, server_host, server_port=SERVICE_PORT):
+        """发送文件到指定服务器"""
         # 检查文件是否存在
         if not os.path.isfile(file_path):
             self.transferFailed.emit(os.path.basename(file_path), "文件不存在")
             return False
         
-        # 如果有正在进行的传输，返回错误
-        if self.current_transfer and self.current_transfer.is_alive():
-            self.transferFailed.emit(os.path.basename(file_path), "已有正在进行的传输")
-            return False
+        # 获取文件信息
+        filename = os.path.basename(file_path)
+        file_size = os.path.getsize(file_path)
         
-        # 启动新的传输线程
-        self.current_transfer = threading.Thread(
+        # 计算文件MD5哈希值
+        hash_obj = hashlib.md5()
+        with open(file_path, 'rb') as f:
+            for chunk in iter(lambda: f.read(8192), b''):
+                hash_obj.update(chunk)
+        file_hash = hash_obj.hexdigest()
+        
+        # 创建文件信息
+        file_info = {
+            "name": filename,
+            "size": file_size,
+            "hash": file_hash,
+            "type": os.path.splitext(filename)[1][1:],  # 文件类型（扩展名）
+            "timestamp": int(time.time())
+        }
+        
+        # 启动传输线程
+        self.transfer_thread = threading.Thread(
             target=self._send_file_thread,
-            args=(file_path, target_ip, target_port, timeout),
+            args=(file_path, file_info, server_host, server_port),
             daemon=True
         )
-        self.current_transfer.start()
+        self.transfer_thread.start()
         
         return True
     
-    def _send_file_thread(self, file_path, target_ip, target_port, timeout):
+    def _send_file_thread(self, file_path, file_info, server_host, server_port):
         """文件发送线程"""
-        file_name = os.path.basename(file_path)
-        client_socket = None
+        filename = file_info["name"]
+        file_size = file_info["size"]
         
         try:
-            # 计算文件大小和哈希值
-            file_size = os.path.getsize(file_path)
-            file_hash = self._calculate_file_hash(file_path)
+            # 连接到服务器
+            self.statusChanged.emit(f"正在连接到 {server_host}:{server_port}...")
+            self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.client_socket.settimeout(10)  # 设置超时时间为10秒
+            self.client_socket.connect((server_host, server_port))
             
-            # 准备元数据
-            file_info = {
-                "name": file_name,
-                "size": file_size,
-                "hash": file_hash
-            }
+            # 发送文件信息
+            self.statusChanged.emit("正在发送文件信息...")
+            info_json = json.dumps(file_info)
+            self.client_socket.sendall(info_json.encode('utf-8'))
             
-            # 更新状态
-            self.statusChanged.emit(f"正在连接到 {target_ip}:{target_port}...")
+            # 等待服务器确认
+            response_data = self.client_socket.recv(4096)
+            if not response_data:
+                raise Exception("服务器没有响应")
             
-            # 创建客户端套接字
-            client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client_socket.settimeout(timeout)
-            client_socket.connect((target_ip, target_port))
+            response = json.loads(response_data.decode('utf-8'))
             
-            # 发送文件元数据
-            header = json.dumps(file_info).encode('utf-8') + b"\n"
-            client_socket.sendall(header)
-            
-            # 更新状态
-            self.statusChanged.emit(f"正在发送: {file_name}")
+            # 检查服务器响应
+            if response.get("status") != "accepted":
+                reason = response.get("reason", "未知原因")
+                raise Exception(f"服务器拒绝了传输请求: {reason}")
             
             # 发送文件数据
+            self.statusChanged.emit(f"正在发送文件: {filename}")
+            
             with open(file_path, 'rb') as f:
-                bytes_sent = 0
-                last_progress_time = time.time()
+                sent = 0
                 
-                while bytes_sent < file_size:
-                    # 读取文件块
-                    chunk = f.read(BUFFER_SIZE)
+                while sent < file_size:
+                    # 读取数据块
+                    chunk = f.read(8192)
                     if not chunk:
                         break
                     
-                    # 发送数据
-                    client_socket.sendall(chunk)
-                    bytes_sent += len(chunk)
+                    # 发送数据块
+                    self.client_socket.sendall(chunk)
                     
-                    # 更新进度（限制更新频率）
-                    current_time = time.time()
-                    if current_time - last_progress_time >= 0.1 or bytes_sent == file_size:
-                        self.transferProgress.emit(file_name, bytes_sent, file_size)
-                        last_progress_time = current_time
+                    # 更新发送计数
+                    sent += len(chunk)
+                    
+                    # 发送进度信号
+                    self.transferProgress.emit(filename, sent, file_size)
             
-            # 接收响应
-            response_data = b""
-            while b"\n" not in response_data:
-                chunk = client_socket.recv(BUFFER_SIZE)
-                if not chunk:
-                    break
-                response_data += chunk
-                if len(response_data) > 10240:  # 限制响应大小
-                    break
+            # 等待服务器确认传输完成
+            response_data = self.client_socket.recv(4096)
+            if not response_data:
+                raise Exception("服务器没有确认传输完成")
             
-            # 解析响应
-            if b"\n" in response_data:
-                response_json = response_data.split(b"\n")[0].decode('utf-8')
-                response = json.loads(response_json)
-                
-                # 检查传输状态
-                if response.get("status") == "success":
-                    logger.info(f"文件发送成功: {file_name}")
-                    self.transferComplete.emit(file_name, response.get("message", "传输成功"))
-                else:
-                    error_msg = response.get("message", "未知错误")
-                    logger.error(f"文件发送失败: {error_msg}")
-                    self.transferFailed.emit(file_name, error_msg)
+            # 解析服务器响应
+            response = json.loads(response_data.decode('utf-8'))
+            
+            # 检查传输结果
+            if response.get("status") == "success":
+                logger.info(f"文件发送成功: {filename}")
+                self.statusChanged.emit("传输已完成")
+                self.transferComplete.emit(filename, response)
             else:
-                # 无有效响应但数据已发送完成
-                logger.info(f"文件数据已发送，但未收到确认响应: {file_name}")
-                self.transferComplete.emit(file_name, "传输可能已完成，但未收到确认")
+                error_msg = response.get("message", "未知错误")
+                raise Exception(f"服务器报告错误: {error_msg}")
         
         except Exception as e:
-            logger.error(f"文件发送错误: {str(e)}")
-            self.transferFailed.emit(file_name, str(e))
+            error_msg = str(e)
+            logger.error(f"文件发送失败: {filename} - {error_msg}")
+            self.statusChanged.emit(f"传输失败: {error_msg}")
+            self.transferFailed.emit(filename, error_msg)
         
         finally:
-            # 关闭套接字
-            if client_socket:
+            # 关闭客户端连接
+            if self.client_socket:
                 try:
-                    client_socket.close()
+                    self.client_socket.close()
                 except:
                     pass
-            
-            # 更新状态
-            self.statusChanged.emit("传输已完成")
-    
-    def _calculate_file_hash(self, file_path):
-        """计算文件MD5哈希值"""
-        hash_md5 = hashlib.md5()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
-                hash_md5.update(chunk)
-        return hash_md5.hexdigest()
 
 # 如果作为独立脚本运行，执行测试代码
 if __name__ == "__main__":
@@ -453,6 +457,7 @@ if __name__ == "__main__":
     
     # 创建服务器
     server = FileTransferServer(save_dir=save_dir)
+    server.auto_accept = True  # 测试模式自动接受
     
     # 注册服务器回调
     def on_server_status(status):

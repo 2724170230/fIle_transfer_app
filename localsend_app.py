@@ -1,9 +1,11 @@
 import sys
 import os
-import json
 import logging
-from PyQt5.QtWidgets import QApplication, QMessageBox, QFileDialog
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtWidgets import (QApplication, QMessageBox, QFileDialog, 
+                            QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
+                            QPushButton, QRadioButton, QButtonGroup)
+from PyQt5.QtCore import Qt, QTimer, QSize
+from PyQt5.QtGui import QIcon, QFont
 
 from localsend_ui_design import MainWindow, DeviceNameGenerator
 from network_discovery import NetworkDiscovery
@@ -13,8 +15,113 @@ from file_transfer import FileTransferServer, FileTransferClient
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("SendNowApp")
 
-# 配置文件路径
-CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".sendnow_settings.json")
+class FileReceiveDialog(QDialog):
+    """文件接收确认对话框"""
+    
+    def __init__(self, file_info, parent=None):
+        super().__init__(parent)
+        self.file_info = file_info
+        self.save_dir = None
+        self.setup_ui()
+    
+    def setup_ui(self):
+        # 设置对话框属性
+        self.setWindowTitle("文件接收请求")
+        self.setMinimumWidth(400)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        
+        # 主布局
+        layout = QVBoxLayout(self)
+        
+        # 文件信息
+        file_name = self.file_info.get('name', 'unknown_file')
+        file_size = self.file_info.get('size', 0)
+        sender = self.file_info.get('sender', 'unknown')
+        
+        # 格式化文件大小
+        if file_size < 1024:
+            size_str = f"{file_size} B"
+        elif file_size < 1024 * 1024:
+            size_str = f"{file_size / 1024:.1f} KB"
+        else:
+            size_str = f"{file_size / (1024 * 1024):.1f} MB"
+        
+        # 图标和标题
+        title_layout = QHBoxLayout()
+        
+        title_icon = QLabel()
+        title_icon.setPixmap(QIcon("icons/receive.svg").pixmap(QSize(32, 32)))
+        title_layout.addWidget(title_icon)
+        
+        title_label = QLabel("收到文件接收请求")
+        title_label.setFont(QFont("", 14, QFont.Bold))
+        title_layout.addWidget(title_label)
+        title_layout.addStretch()
+        
+        layout.addLayout(title_layout)
+        
+        # 文件信息
+        info_layout = QVBoxLayout()
+        
+        info_layout.addWidget(QLabel(f"文件名: {file_name}"))
+        info_layout.addWidget(QLabel(f"大小: {size_str}"))
+        info_layout.addWidget(QLabel(f"发送方: {sender}"))
+        
+        layout.addLayout(info_layout)
+        layout.addSpacing(10)
+        
+        # 保存选项
+        self.default_radio = QRadioButton("保存到默认位置")
+        self.custom_radio = QRadioButton("选择其他位置...")
+        
+        self.button_group = QButtonGroup(self)
+        self.button_group.addButton(self.default_radio)
+        self.button_group.addButton(self.custom_radio)
+        self.default_radio.setChecked(True)
+        
+        # 连接自定义位置选择
+        self.custom_radio.toggled.connect(self.on_custom_toggled)
+        
+        layout.addWidget(self.default_radio)
+        layout.addWidget(self.custom_radio)
+        
+        # 按钮区域
+        button_layout = QHBoxLayout()
+        
+        self.reject_button = QPushButton("拒绝")
+        self.reject_button.setAutoDefault(False)
+        
+        self.accept_button = QPushButton("接收文件")
+        self.accept_button.setAutoDefault(True)
+        self.accept_button.setDefault(True)
+        
+        button_layout.addWidget(self.reject_button)
+        button_layout.addStretch()
+        button_layout.addWidget(self.accept_button)
+        
+        # 连接按钮信号
+        self.reject_button.clicked.connect(self.reject)
+        self.accept_button.clicked.connect(self.accept)
+        
+        layout.addSpacing(10)
+        layout.addLayout(button_layout)
+    
+    def on_custom_toggled(self, checked):
+        """用户切换到自定义保存位置"""
+        if checked:
+            dir_path = QFileDialog.getExistingDirectory(
+                self, 
+                "选择保存位置", 
+                os.path.expanduser("~/Downloads")
+            )
+            
+            if dir_path:
+                self.save_dir = dir_path
+                custom_text = f"选择其他位置... ({os.path.basename(dir_path)})"
+                self.custom_radio.setText(custom_text)
+            else:
+                # 如果用户取消选择，切回默认选项
+                self.default_radio.setChecked(True)
 
 class SendNowApp(MainWindow):
     """SendNow应用主类，集成UI、网络发现和文件传输功能"""
@@ -26,15 +133,11 @@ class SendNowApp(MainWindow):
         self.device_name, self.device_id = DeviceNameGenerator.get_persistent_name_and_id()
         logger.info(f"设备信息: {self.device_name} {self.device_id}")
         
-        # 读取配置文件
-        self.settings = self.load_settings()
-        
         # 初始化网络发现模块
         self.network_discovery = NetworkDiscovery(self.device_name, self.device_id)
         
-        # 初始化文件传输服务器（使用配置中的保存路径）
-        save_dir = self.settings.get("save_directory")
-        self.transfer_server = FileTransferServer(save_dir=save_dir)
+        # 初始化文件传输服务器
+        self.transfer_server = FileTransferServer()
         
         # 初始化文件传输客户端
         self.transfer_client = FileTransferClient()
@@ -47,36 +150,6 @@ class SendNowApp(MainWindow):
         
         # 启动服务
         self.start_services()
-    
-    def load_settings(self):
-        """从配置文件加载设置"""
-        default_settings = {
-            "save_directory": os.path.join(os.path.expanduser("~"), "Downloads")
-        }
-        
-        try:
-            if os.path.exists(CONFIG_FILE):
-                with open(CONFIG_FILE, 'r') as f:
-                    settings = json.load(f)
-                    # 确保所有必要的设置项都存在
-                    for key, value in default_settings.items():
-                        if key not in settings:
-                            settings[key] = value
-                    return settings
-        except Exception as e:
-            logger.error(f"加载配置文件失败: {str(e)}")
-        
-        # 如果配置文件不存在或读取失败，返回默认设置
-        return default_settings
-    
-    def save_settings(self):
-        """保存设置到配置文件"""
-        try:
-            with open(CONFIG_FILE, 'w') as f:
-                json.dump(self.settings, f)
-            logger.info("设置已保存到配置文件")
-        except Exception as e:
-            logger.error(f"保存配置文件失败: {str(e)}")
     
     def connect_signals(self):
         """连接所有的信号和槽"""
@@ -91,6 +164,7 @@ class SendNowApp(MainWindow):
         self.transfer_server.transferProgress.connect(self.on_server_progress)
         self.transfer_server.transferComplete.connect(self.on_server_transfer_complete)
         self.transfer_server.transferFailed.connect(self.on_server_transfer_failed)
+        self.transfer_server.pendingTransferRequest.connect(self.on_pending_transfer_request)
         
         # 连接文件传输客户端信号
         self.transfer_client.statusChanged.connect(self.on_client_status_changed)
@@ -130,9 +204,6 @@ class SendNowApp(MainWindow):
     
     def closeEvent(self, event):
         """窗口关闭事件"""
-        # 保存设置
-        self.save_settings()
-        
         # 停止所有服务
         self.stop_services()
         event.accept()
@@ -205,6 +276,34 @@ class SendNowApp(MainWindow):
         
         # 可以在这里更新UI状态
         pass
+    
+    def on_pending_transfer_request(self, file_info, client_socket):
+        """处理等待确认的文件传输请求"""
+        logger.info(f"收到待确认的文件传输请求: {file_info['name']} ({file_info['size']} 字节) 来自 {file_info['sender']}")
+        
+        # 跳转到接收面板
+        self.receiveButton.setChecked(True)
+        self.stack.setCurrentWidget(self.receivePanel)
+        
+        # 确保开启接收模式
+        if self.receivePanel.offButton.isChecked():
+            self.receivePanel.onButton.setChecked(True)
+            self.on_receive_switch_toggled(True)
+        
+        # 显示文件接收确认对话框
+        dialog = FileReceiveDialog(file_info, self)
+        result = dialog.exec_()
+        
+        if result == QDialog.Accepted:
+            # 用户接受文件传输
+            save_dir = dialog.save_dir
+            client_address = (file_info['sender'], 0)  # 端口为0，因为这里不重要
+            
+            # 获取客户端传过来的文件信息
+            self.transfer_server.accept_transfer(client_socket, client_address, file_info, save_dir)
+        else:
+            # 用户拒绝文件传输
+            self.transfer_server.reject_transfer(client_socket)
     
     def on_transfer_request(self, info):
         """处理传输请求事件"""
@@ -404,9 +503,6 @@ class SendNowApp(MainWindow):
             if success:
                 # 更新设置面板显示
                 self.settingsPanel.savePathEdit.setText(directory)
-                # 更新设置并保存到配置文件
-                self.settings["save_directory"] = directory
-                self.save_settings()
                 logger.info(f"文件保存目录已更改为: {directory}")
             else:
                 QMessageBox.warning(self, "设置失败", "无法设置保存目录，请确保目录存在且可写")
