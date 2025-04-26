@@ -1261,27 +1261,75 @@ def _receive_file(self, task: TransferTask, client_sock: socket.socket):
                             if offset > bytes_received:
                                 # 当前位置和数据块偏移量之间有空白，记录警告但不填充零
                                 gap_size = offset - bytes_received
-                                if gap_size > 10 * 1024 * 1024:  # 超过10MB的缺口认为是错误
+                                
+                                # 特殊情况：如果是第一个数据块且offset是常见的块大小的倍数，可能是发送方使用了固定块大小跳过了开始部分
+                                if bytes_received == 0 and (offset % 32768 == 0 or offset % 65536 == 0):
+                                    logger.warning(f"第一个数据块偏移量为 {offset}，可能是发送方使用了固定块大小跳过了开始部分")
+                                    
+                                    # 在临时文件开头填充零，以匹配期望的偏移量
+                                    logger.info(f"填充文件开头 {offset} 字节的零")
+                                    f.seek(0)
+                                    zeros = bytearray(min(1024*1024, offset))  # 最多一次写入1MB
+                                    
+                                    # 分块写入零以避免内存问题
+                                    remaining = offset
+                                    while remaining > 0:
+                                        write_size = min(remaining, len(zeros))
+                                        f.write(zeros[:write_size])
+                                        f.flush()
+                                        remaining -= write_size
+                                    
+                                    # 确保文件指针正确
+                                    f.seek(offset)
+                                    bytes_received = offset
+                                    logger.info(f"已填充零至偏移量 {offset}，更新接收位置")
+                                    
+                                    # 添加数据到内存缓冲区
+                                    received_data.extend(bytearray(offset))
+                                    continue
+                                
+                                # 检查是否是断点续传问题
+                                if gap_size <= 65536 and bytes_received == 0:  # 小于64KB的差距可能是发送方使用的块大小
+                                    logger.warning(f"收到的第一个数据块偏移量为 {offset}，可能是块大小同步问题")
+                                    
+                                    # 填充零到文件，并调整接收位置
+                                    zero_block = bytearray(gap_size)
+                                    f.write(zero_block)
+                                    f.flush()
+                                    os.fsync(f.fileno())
+                                    
+                                    # 更新接收位置
+                                    bytes_received = offset
+                                    received_data.extend(zero_block)
+                                    logger.info(f"已填充 {gap_size} 字节的零，并更新接收位置到 {bytes_received}")
+                                elif gap_size > 10 * 1024 * 1024:  # 超过10MB的缺口认为是错误
                                     logger.error(f"偏移量差异过大 ({gap_size} 字节)，可能是错误数据")
                                     if retry_count >= max_retries:
                                         raise ConnectionError("偏移量差异过大")
                                     retry_count += 1
                                     time.sleep(2)
                                     continue
-                                
-                                # 记录错误但不再用零填充，可能导致文件损坏
-                                logger.error(f"文件传输存在数据缺口 {gap_size} 字节，不再填充零。这可能导致文件损坏。")
-                                
-                                # 如果有大量数据缺失，可能是传输出现了严重问题
-                                if gap_size > 1024 * 1024:  # 超过1MB的缺口
-                                    logger.error(f"数据缺口过大，放弃当前传输并重试")
-                                    if retry_count >= max_retries:
-                                        raise ConnectionError("数据缺口过大")
-                                    retry_count += 1
-                                    time.sleep(2)
-                                    continue
+                                else:
+                                    # 记录错误但不再用零填充，可能导致文件损坏
+                                    logger.error(f"文件传输存在数据缺口 {gap_size} 字节，不再填充零。这可能导致文件损坏。")
                                     
-                                bytes_received = offset  # 更新已接收字节数到当前偏移量
+                                    # 如果有大量数据缺失，可能是传输出现了严重问题
+                                    if gap_size > 1024 * 1024:  # 超过1MB的缺口
+                                        logger.error(f"数据缺口过大，放弃当前传输并重试")
+                                        if retry_count >= max_retries:
+                                            raise ConnectionError("数据缺口过大")
+                                        retry_count += 1
+                                        time.sleep(2)
+                                        continue
+                                        
+                                # 更新文件位置
+                                current_pos = f.tell()
+                                if current_pos != offset:
+                                    logger.info(f"调整文件位置从 {current_pos} 到 {offset}")
+                                    f.seek(offset)
+                                
+                                # 更新已接收字节数到当前偏移量
+                                bytes_received = offset
                             elif offset < bytes_received:
                                 # 收到了旧数据块，检查是否为重复
                                 if offset + chunk_size <= bytes_received:
