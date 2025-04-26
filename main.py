@@ -1,162 +1,85 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""
-SendNow - 局域网文件传输工具
-"""
-
 import sys
 import os
-import logging
 from PyQt5.QtWidgets import QApplication
-from PyQt5.QtGui import QIcon
+from PyQt5.QtCore import Qt
 
-# 导入实现模块
-import network
-import transfer
-import transfer_impl
-
-# 应用UI扩展
-from ui_extensions import apply_ui_extensions
-apply_ui_extensions()
-
-# 导入UI和控制器
 from localsend_ui_design import MainWindow
-from app_controller import AppController
+from network_manager import NetworkManager
+from device_discovery import DeviceDiscovery
 
-# 配置日志
-logging.basicConfig(
-    level=logging.DEBUG,  # 改为DEBUG级别以获取更多信息
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-
-# 添加文件日志处理器
-log_file = os.path.join(os.path.expanduser("~"), "SendNow.log")
-file_handler = logging.FileHandler(log_file)
-file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-logging.getLogger().addHandler(file_handler)
-
-logger = logging.getLogger("SendNow")
-logger.info(f"日志文件将保存到: {log_file}")
-
-def main():
-    """程序入口"""
-    # 创建应用
-    app = QApplication(sys.argv)
-    
-    # 设置应用图标
-    icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons", "app_icon.svg")
-    if os.path.exists(icon_path):
-        app.setWindowIcon(QIcon(icon_path))
-    
-    # 输出网络接口信息，帮助调试
-    try:
-        import socket
-        import netifaces
+class App:
+    def __init__(self):
+        self.app = QApplication(sys.argv)
+        self.window = MainWindow()
         
-        logger.info("=== 网络接口信息 ===")
-        for iface in netifaces.interfaces():
-            addrs = netifaces.ifaddresses(iface)
-            if netifaces.AF_INET in addrs:
-                for addr in addrs[netifaces.AF_INET]:
-                    ip = addr['addr']
-                    logger.info(f"接口: {iface}, IP: {ip}")
-        logger.info("===================")
-    except ImportError:
-        logger.info("netifaces 模块未安装，无法显示详细网络接口信息")
-        # 尝试显示基本信息
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            logger.info(f"主机IP: {s.getsockname()[0]}")
-            s.close()
-        except:
-            logger.warning("无法获取主机IP信息")
-    
-    # 创建控制器
-    controller = AppController()
-    
-    # 创建主窗口
-    window = MainWindow()
-    
-    # 连接UI和控制器
-    connect_ui_controller(window, controller)
-    
-    # 启动后端服务
-    controller.start()
-    
-    # 显示窗口
-    window.show()
-    
-    # 运行应用
-    exit_code = app.exec_()
-    
-    # 停止后端服务
-    controller.stop()
-    
-    # 退出
-    sys.exit(exit_code)
-
-def connect_ui_controller(window, controller):
-    """连接UI和控制器"""
-    # 使用新的方法设置控制器
-    window.setAppController(controller)
-    
-    # 接收面板
-    receive_panel = window.receivePanel
-    
-    # 设备发现事件
-    controller.deviceFound.connect(receive_panel.onDeviceFound)
-    controller.deviceLost.connect(receive_panel.onDeviceLost)
-    
-    # 传输请求事件
-    controller.transferRequest.connect(receive_panel.onTransferRequest)
-    
-    # 传输进度事件
-    controller.transferProgress.connect(receive_panel.onTransferProgress)
-    
-    # 传输完成事件
-    controller.transferComplete.connect(receive_panel.onTransferComplete)
-    
-    # 传输错误事件
-    controller.transferError.connect(receive_panel.onTransferError)
-    
-    # 发送面板
-    send_panel = window.sendPanel
-    
-    # 传输进度事件
-    controller.transferProgress.connect(send_panel.onTransferProgress)
-    
-    # 传输完成事件
-    controller.transferComplete.connect(send_panel.onTransferComplete)
-    
-    # 传输错误事件
-    controller.transferError.connect(send_panel.onTransferError)
-    
-    # 设置面板
-    settings_panel = window.settingsPanel
-    
-    # 设置默认保存路径
-    settings_panel.savePathEdit.setText(controller.get_save_directory())
-    
-    # 浏览按钮点击
-    original_browse = settings_panel.browseSavePath
-    
-    def browse_and_set():
-        """浏览并设置保存路径"""
-        directory = original_browse()
-        if directory and os.path.isdir(directory):
-            if controller.set_save_directory(directory):
-                settings_panel.savePathEdit.setText(directory)
-    
-    settings_panel.browseButton.clicked.disconnect()
-    settings_panel.browseButton.clicked.connect(browse_and_set)
-    
-    # 更新设备名称和ID显示
-    if hasattr(window, 'receivePanel') and hasattr(window.receivePanel, 'deviceNameLabel'):
-        window.receivePanel.deviceNameLabel.setText(
-            f"{controller.device_name} {controller.device_id}"
+        # 初始化网络管理器
+        self.network_manager = NetworkManager(
+            receive_callback=self.file_received,
+            progress_callback=self.update_progress
         )
+        
+        # 初始化设备发现
+        self.device_discovery = DeviceDiscovery(
+            device_found_callback=self.device_found
+        )
+        
+        # 设置设备信息
+        device_name, device_id = self.window.receivePanel.device_name, self.window.receivePanel.device_id
+        self.device_discovery.set_device_info(device_name, device_id)
+        
+        # 将网络管理器传递给UI组件
+        self.window.sendPanel.set_network_manager(self.network_manager)
+        self.window.receivePanel.set_network_manager(self.network_manager)
+        
+        # 连接UI信号到功能
+        self.connect_signals()
+        
+        # 创建必要的目录
+        self.create_directories()
+        
+        # 启动服务
+        self.start_services()
+    
+    def create_directories(self):
+        """创建必要的目录"""
+        # 创建icons目录
+        os.makedirs("icons", exist_ok=True)
+        
+        # 创建默认下载目录
+        os.makedirs(os.path.expanduser("~/Downloads"), exist_ok=True)
+    
+    def connect_signals(self):
+        """连接UI信号到功能"""
+        # 连接发送按钮
+        self.window.sendPanel.sendButton.clicked.connect(
+            self.window.sendPanel.sendFileToDevice
+        )
+        
+    def start_services(self):
+        """启动服务"""
+        # 启动设备发现
+        self.device_discovery.start_discovery()
+    
+    def file_received(self, file_path):
+        """文件接收完成回调"""
+        self.window.receivePanel.fileReceived(file_path)
+    
+    def update_progress(self, filename, progress):
+        """更新传输进度回调"""
+        # 根据当前显示的面板决定通知哪个
+        if self.window.stack.currentWidget() == self.window.receivePanel:
+            self.window.receivePanel.updateProgress(filename, progress)
+    
+    def device_found(self, device):
+        """发现新设备回调"""
+        # 更新设备列表
+        self.window.sendPanel.add_device_to_list(device)
+    
+    def run(self):
+        """运行应用程序"""
+        self.window.show()
+        return self.app.exec_()
 
 if __name__ == "__main__":
-    main() 
+    app = App()
+    sys.exit(app.run()) 
