@@ -13,23 +13,124 @@
 
 ## 安装与运行
 
-### 环境要求
+### 方式一：直接安装运行
+
+#### 环境要求
 
 - Python 3.6+
 - PyQt5
 - netifaces
 
-### 安装依赖
+#### 安装依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 运行应用
+#### 运行应用
 
 ```bash
 python localsend_app.py
 ```
+
+### 方式二：使用Docker运行（推荐）
+
+使用Docker可以在任何支持Docker的操作系统上运行SendNow，无需安装Python或其他依赖。
+
+#### 前提条件
+
+- 安装 [Docker](https://docs.docker.com/get-docker/)
+- 安装 [Docker Compose](https://docs.docker.com/compose/install/)（可选，但推荐）
+- Linux系统需要开启X11转发
+
+#### 使用Docker部署
+
+1. **克隆或下载项目代码**
+
+2. **构建并启动Docker容器**
+
+   使用docker-compose（推荐）:
+   ```bash
+   docker-compose up -d
+   ```
+
+   或者使用Docker命令:
+   ```bash
+   # 构建Docker镜像
+   docker build -t localsend-app .
+   
+   # 运行容器
+   docker run -d --name localsend-app \
+     --network host \
+     -v /tmp/.X11-unix:/tmp/.X11-unix \
+     -v $HOME/Downloads:/root/Downloads \
+     -e DISPLAY=$DISPLAY \
+     -e QT_X11_NO_MITSHM=1 \
+     --cap-add NET_ADMIN \
+     --cap-add NET_BROADCAST \
+     localsend-app
+   ```
+
+#### 针对不同操作系统的Docker配置
+
+##### Linux系统
+
+1. 允许Docker访问X11显示服务器：
+   ```bash
+   xhost +local:docker
+   ```
+
+2. 正常启动容器：
+   ```bash
+   docker-compose up -d
+   ```
+
+##### macOS系统
+
+1. 安装XQuartz：
+   ```bash
+   brew install --cask xquartz
+   ```
+
+2. 启动XQuartz并在偏好设置中允许网络连接
+
+3. 获取IP地址：
+   ```bash
+   IP=$(ifconfig en0 | grep inet | awk '$1=="inet" {print $2}')
+   ```
+
+4. 设置DISPLAY环境变量：
+   ```bash
+   DISPLAY=$IP:0
+   ```
+
+5. 允许本地连接：
+   ```bash
+   xhost + $IP
+   ```
+
+6. 修改docker-compose.yml：
+   ```yaml
+   environment:
+     - DISPLAY=$IP:0
+   ```
+
+##### Windows系统
+
+1. 安装X服务器，如[VcXsrv](https://sourceforge.net/projects/vcxsrv/)
+
+2. 启动VcXsrv（设置"Disable access control"）
+
+3. 获取IP地址：
+   ```powershell
+   $IP = (Get-NetIPAddress | Where-Object {$_.AddressFamily -eq "IPv4" -and $_.IPAddress -notlike "127.*"}).IPAddress
+   ```
+
+4. 修改docker-compose.yml：
+   ```yaml
+   environment:
+     - DISPLAY=$IP:0.0
+   ```
 
 ## 使用说明
 
@@ -68,6 +169,8 @@ python localsend_app.py
 │   ├── send.svg           # 发送图标
 │   └── settings.svg       # 设置图标
 ├── requirements.txt       # 项目依赖
+├── Dockerfile             # Docker构建文件
+├── docker-compose.yml     # Docker Compose配置
 └── README.md              # 项目说明
 ```
 

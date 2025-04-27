@@ -7,13 +7,13 @@ from PyQt5.QtWidgets import (QApplication, QMessageBox, QFileDialog,
 from PyQt5.QtCore import Qt, QTimer, QSize
 from PyQt5.QtGui import QIcon, QFont
 
+# 确保这是第一个执行的日志配置
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("SendNowApp")
+
 from localsend_ui_design import MainWindow, DeviceNameGenerator
 from network_discovery import NetworkDiscovery
 from file_transfer import FileTransferServer, FileTransferClient
-
-# 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger("SendNowApp")
 
 def create_message_box(parent, icon, title, text):
     """创建高对比度的消息框"""

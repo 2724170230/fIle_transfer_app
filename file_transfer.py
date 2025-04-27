@@ -8,8 +8,8 @@ import tempfile
 import hashlib
 from PyQt5.QtCore import QObject, pyqtSignal
 
-# 配置日志
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# 确保这是第一个执行的日志配置
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("FileTransfer")
 
 # 默认传输参数

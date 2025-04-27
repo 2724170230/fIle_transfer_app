@@ -1,0 +1,20 @@
+version: '3'
+
+services:
+  localsend-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: localsend-app
+    network_mode: "host"  # 使用主机网络模式以支持UDP广播和网络发现
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix  # X11显示服务器套接字
+      - ${HOME}/Downloads:/root/Downloads  # 挂载下载目录
+    environment:
+      - DISPLAY=${DISPLAY}  # 传递主机显示服务器
+      - QT_X11_NO_MITSHM=1
+    # 安全相关设置
+    cap_add:
+      - NET_ADMIN  # 允许网络管理操作
+      - NET_BROADCAST  # 允许广播功能
+    restart: unless-stopped 
