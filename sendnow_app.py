@@ -1,6 +1,7 @@
 import sys
 import os
 import logging
+import threading
 from PyQt5.QtWidgets import (QApplication, QMessageBox, QFileDialog, 
                             QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                             QPushButton, QRadioButton, QButtonGroup)
@@ -510,26 +511,38 @@ class SendNowApp(MainWindow):
     
     # ===== UI事件处理 =====
     
+    def _stop_services_in_background(self):
+        """在后台线程中停止服务，避免阻塞UI线程"""
+        def stop_thread():
+            # 停止服务
+            self.transfer_server.stop()
+            # 停止网络发现服务，确保其他设备不再能看到此设备
+            self.network_discovery.stop()
+            logger.info("后台服务已完全停止")
+        
+        # 创建并启动后台线程
+        threading.Thread(target=stop_thread, daemon=True).start()
+    
     def on_receive_switch_toggled(self, checked):
         """处理接收开关切换事件"""
         sender = self.sender()
         
         if checked and sender == self.receivePanel.onButton:
             logger.info("接收模式: 开启")
-            # 重启服务
+            # 立即更新UI
+            self.receivePanel.logoWidget.setActive(True)
+            # 启动服务
             self.transfer_server.start()
             self.network_discovery.start()
-            # 启动Logo动画
-            self.receivePanel.logoWidget.setActive(True)
         
         elif checked and sender == self.receivePanel.offButton:
             logger.info("接收模式: 关闭")
-            # 停止服务
-            self.transfer_server.stop()
-            # 停止Logo动画
+            # 先立即更新UI，确保用户看到即时反馈
             self.receivePanel.logoWidget.setActive(False)
             # 重置状态面板（带淡出效果）
             self.receivePanel.resetStatusPanel()
+            # 在后台线程中停止服务，避免阻塞UI
+            self._stop_services_in_background()
     
     def on_device_selected(self, item):
         """处理设备列表项选择事件"""

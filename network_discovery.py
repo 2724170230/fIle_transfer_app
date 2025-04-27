@@ -104,23 +104,55 @@ class NetworkDiscovery(QObject):
         if not self.is_running:
             return
         
+        # 先设置状态为未运行
         self.is_running = False
         self.statusChanged.emit("正在停止设备发现服务...")
         
-        # 等待线程结束
-        if self.discovery_thread and self.discovery_thread.is_alive():
-            self.discovery_thread.join(timeout=1.0)
+        # 在单独的线程中发送离线广播
+        threading.Thread(target=self._send_offline_broadcast, daemon=True).start()
         
-        if self.broadcast_thread and self.broadcast_thread.is_alive():
-            self.broadcast_thread.join(timeout=1.0)
-        
-        if self.cleanup_thread and self.cleanup_thread.is_alive():
-            self.cleanup_thread.join(timeout=1.0)
-        
+        # 不再等待线程结束，让它们自然终止
         # 清除设备列表
         self.devices.clear()
         self.statusChanged.emit("设备发现服务已停止")
         logger.info("设备发现服务已停止")
+    
+    def _send_offline_broadcast(self):
+        """发送离线广播通知其他设备"""
+        try:
+            # 创建UDP广播套接字
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.settimeout(self.socket_timeout)
+            
+            # 准备离线广播消息 - 包含offline=True标记
+            message = {
+                "name": self.device_name,
+                "id": self.device_id,
+                "port": self.service_port,
+                "offline": True  # 这是一个离线通知
+            }
+            
+            # 转换为JSON
+            data = json.dumps(message).encode('utf-8')
+            
+            # 获取所有网络接口的广播地址
+            broadcast_addresses = self._get_broadcast_addresses()
+            
+            # 向所有广播地址发送离线通知
+            for broadcast_address in broadcast_addresses:
+                sock.sendto(data, (broadcast_address, self.discovery_port))
+                logger.debug(f"已发送离线通知到 {broadcast_address}")
+            
+            logger.info("离线广播已发送")
+        
+        except Exception as e:
+            logger.error(f"发送离线广播时出错: {str(e)}")
+        finally:
+            try:
+                sock.close()
+            except:
+                pass
     
     def _discovery_loop(self):
         """设备发现循环"""
@@ -229,13 +261,24 @@ class NetworkDiscovery(QObject):
             device_id = message.get('id', '')
             device_ip = addr[0]
             device_port = message.get('port', self.service_port)
+            is_offline = message.get('offline', False)  # 获取离线状态
             
             # 忽略自己的广播
             if device_id == self.device_id:
                 return
             
-            # 创建或更新设备信息
+            # 创建设备信息对象
             device = DeviceInfo(device_name, device_id, device_ip, device_port)
+            
+            # 如果是离线广播，则从设备列表中移除该设备并发出设备离线信号
+            if is_offline:
+                if device_id in self.devices:
+                    removed_device = self.devices.pop(device_id)
+                    logger.info(f"收到设备离线通知: {device_name} ({device_id}) - {device_ip}")
+                    self.deviceLost.emit(removed_device)
+                return
+            
+            # 处理正常的设备发现广播
             is_new_device = device_id not in self.devices
             
             # 更新设备列表

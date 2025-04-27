@@ -69,18 +69,24 @@ class FileTransferServer(QObject):
         
         # 设置停止标志
         self.running = False
+        self.statusChanged.emit("服务器正在停止...")
         
-        try:
-            # 关闭服务器套接字
-            if self.server_socket:
-                self.server_socket.close()
+        # 在后台线程中关闭套接字和清理
+        def close_socket():
+            try:
+                # 关闭服务器套接字
+                if self.server_socket:
+                    self.server_socket.close()
+                
+                logger.info("文件传输服务器已停止")
+                self.statusChanged.emit("服务器已停止")
             
-            logger.info("文件传输服务器已停止")
-            self.statusChanged.emit("服务器已停止")
+            except Exception as e:
+                logger.error(f"停止文件传输服务器失败: {str(e)}")
+                self.statusChanged.emit(f"停止失败: {str(e)}")
         
-        except Exception as e:
-            logger.error(f"停止文件传输服务器失败: {str(e)}")
-            self.statusChanged.emit(f"停止失败: {str(e)}")
+        # 启动后台线程进行关闭操作
+        threading.Thread(target=close_socket, daemon=True).start()
     
     def set_save_directory(self, directory):
         """设置文件保存目录"""
