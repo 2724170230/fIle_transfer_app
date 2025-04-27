@@ -70,7 +70,7 @@
 
 4. **运行应用**
    ```bash
-   python sendnow_app.py
+   python3 sendnow_app.py
    ```
 
 ### Linux安装步骤
@@ -97,7 +97,7 @@
 
 4. **运行应用**
    ```bash
-   python sendnow_app.py
+   python3 sendnow_app.py
    ```
 
 ## 常见问题解决
