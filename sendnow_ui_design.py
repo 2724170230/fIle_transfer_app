@@ -3,13 +3,18 @@ import random
 import hashlib
 import os
 import math  # 添加math模块导入
+import socket
+import netifaces
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, 
                              QProgressBar, QListWidget, QListWidgetItem, QStackedWidget, 
                              QFrame, QSplitter, QGridLayout, QSpacerItem, QSizePolicy,
-                             QButtonGroup, QToolButton, QAction)
+                             QButtonGroup, QToolButton, QAction, QToolTip)
 from PyQt5.QtCore import Qt, QSize, pyqtSignal, QMimeData, QUrl, QTimer, QRect, QPoint, QPointF, QPropertyAnimation, QEasingCurve
 from PyQt5.QtGui import QIcon, QColor, QPalette, QFont, QDrag, QPainter, QPen, QBrush, QPainterPath, QRadialGradient, QLinearGradient, QTransform
+
+# 导入网络相关常量
+from transfer.common import SERVICE_PORT
 
 # 更高对比度的赛博朋克风格色调
 DARK_BG = "#10111E"        # 更深的导航栏背景色
@@ -836,6 +841,79 @@ class AnimationWidget(QWidget):
         # 更新角度
         self.angle = (self.angle + 5) % 360
 
+class InfoButton(QToolButton):
+    """信息按钮，显示为一个i图标"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet(f"""
+            QToolButton {{
+                background-color: {HIGHLIGHT_COLOR};
+                color: {TEXT_COLOR};
+                border-radius: 12px;
+                font-weight: bold;
+                font-size: 15px;
+                min-width: 24px;
+                min-height: 24px;
+                padding: 0;
+            }}
+            QToolButton:hover {{
+                background-color: {QColor(HIGHLIGHT_COLOR).lighter(110).name()};
+            }}
+        """)
+        self.setText("i")
+        self.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.setCursor(Qt.PointingHandCursor)
+
+class InfoTooltip(QWidget):
+    """自定义悬浮提示窗口，显示设备信息"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent, Qt.ToolTip | Qt.FramelessWindowHint)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setWindowFlags(self.windowFlags() | Qt.NoDropShadowWindowHint)
+        
+        # 创建布局
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(15, 12, 15, 12)
+        layout.setSpacing(8)
+        
+        # 设备信息标签
+        self.deviceNameLabel = QLabel("设备名称:")
+        self.ipAddressLabel = QLabel("IP地址:")
+        self.portLabel = QLabel("端口号:")
+        self.deviceInfoLabel = QLabel("设备信息:")
+        
+        # 添加标签到布局
+        layout.addWidget(self.deviceNameLabel)
+        layout.addWidget(self.ipAddressLabel)
+        layout.addWidget(self.portLabel)
+        layout.addWidget(self.deviceInfoLabel)
+        
+        # 设置样式
+        self.setStyleSheet(f"""
+            QWidget {{
+                background-color: {PANEL_BG};
+                border: 1px solid {BORDER_COLOR};
+                border-radius: 6px;
+            }}
+            QLabel {{
+                color: {TEXT_COLOR};
+                font-size: 13px;
+            }}
+        """)
+    
+    def showEvent(self, event):
+        """显示时添加阴影效果"""
+        super().showEvent(event)
+    
+    def updateInfo(self, device_name, ip_address, port, device_info):
+        """更新显示的设备信息"""
+        self.deviceNameLabel.setText(f"设备名称: {device_name}")
+        self.ipAddressLabel.setText(f"IP地址: {ip_address}")
+        self.portLabel.setText(f"端口号: {port}")
+        self.deviceInfoLabel.setText(f"设备信息: {device_info}")
+
 class ReceivePanel(QWidget):
     """接收文件界面"""
     
@@ -863,6 +941,19 @@ class ReceivePanel(QWidget):
         logoLayout = QVBoxLayout(logoContainer)
         logoLayout.setContentsMargins(0, 0, 0, 0)
         logoLayout.setSpacing(0)  # 减小logo内部间距
+        
+        # 添加信息按钮到右上角
+        topRightLayout = QHBoxLayout()
+        topRightLayout.setContentsMargins(0, 0, 0, 0)
+        topRightLayout.addStretch()
+        
+        # 创建信息按钮
+        self.infoButton = InfoButton()
+        self.infoButton.setFixedSize(24, 24)
+        topRightLayout.addWidget(self.infoButton)
+        
+        # 添加顶部布局到内容布局
+        contentLayout.addLayout(topRightLayout)
         
         self.logoWidget = DynamicLogoWidget()
         logoLayout.addWidget(self.logoWidget, 0, Qt.AlignCenter)
@@ -984,9 +1075,17 @@ class ReceivePanel(QWidget):
         # 设置整体样式
         self.setStyleSheet(f"background-color: {MAIN_BG};")
         
+        # 创建信息提示窗口
+        self.infoTooltip = InfoTooltip()
+        self.infoTooltip.hide()
+        
         # 连接开关信号
         self.onButton.toggled.connect(self.onSwitchToggled)
         self.offButton.toggled.connect(self.onSwitchToggled)
+        
+        # 连接信息按钮事件
+        self.infoButton.enterEvent = self.showDeviceInfo
+        self.infoButton.leaveEvent = self.hideDeviceInfo
         
         # 测试状态面板显示 - 开发时使用
         # QTimer.singleShot(1000, self.simulateReceive)
@@ -1021,6 +1120,46 @@ class ReceivePanel(QWidget):
             self.logoWidget.setActive(False)
             # 重置状态面板
             self.resetStatusPanel()
+    
+    def showDeviceInfo(self, event):
+        """显示设备信息悬浮框"""
+        # 获取设备IP地址
+        ip_address = "未知"
+        try:
+            for interface in netifaces.interfaces():
+                # 跳过回环接口
+                if interface.startswith('lo'):
+                    continue
+                
+                addresses = netifaces.ifaddresses(interface)
+                if netifaces.AF_INET in addresses:
+                    ip_info = addresses[netifaces.AF_INET][0]
+                    if 'addr' in ip_info:
+                        ip_address = ip_info['addr']
+                        break
+        except:
+            ip_address = "无法获取"
+        
+        # 更新信息
+        self.infoTooltip.updateInfo(
+            self.device_name, 
+            ip_address,
+            str(SERVICE_PORT),  # 使用服务端口
+            f"ID: {self.device_id}"
+        )
+        
+        # 确保尺寸正确计算后再定位
+        self.infoTooltip.adjustSize()
+        
+        # 显示悬浮窗
+        global_pos = self.infoButton.mapToGlobal(QPoint(0, self.infoButton.height()))
+        self.infoTooltip.move(global_pos.x() - self.infoTooltip.width() + self.infoButton.width(), 
+                             global_pos.y() + 5)
+        self.infoTooltip.show()
+    
+    def hideDeviceInfo(self, event):
+        """隐藏设备信息悬浮框"""
+        self.infoTooltip.hide()
     
     def resetStatusPanel(self):
         """重置状态面板，在切换到关闭状态或完成传输后调用"""
