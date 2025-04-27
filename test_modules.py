@@ -1,4 +1,8 @@
 """
+以下代码及注释全部由AI Agent生成
+"""
+
+"""
 SendNow文件传输测试模块 (File Transfer Test Module)
 
 该模块用于独立测试SendNow应用的文件传输功能，不依赖于完整的UI界面。

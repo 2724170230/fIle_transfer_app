@@ -1,4 +1,8 @@
 """
+以下代码及注释全部由AI Agent生成
+"""
+
+"""
 文件传输工具函数模块 (File Transfer Utilities Module)
 
 该模块提供文件传输过程中需要的各种辅助函数和工具。

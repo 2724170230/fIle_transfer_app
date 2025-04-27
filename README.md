@@ -104,7 +104,6 @@
 
 1. **Windows: "Microsoft Visual C++ 14.0 is required"错误**
    - 确保已安装Microsoft C++ Build Tools
-   - 重启电脑后重新尝试安装
 
 2. **macOS: "Could not find a version that satisfies the requirement PyQt5"错误**
    - 尝试使用以下命令：`pip install PyQt5 --config-settings --confirm-license= --verbose`
@@ -163,5 +162,4 @@
 - **文件验证**：使用MD5哈希检查确保文件传输完整性
 
 ## 预览
-
 应用使用现代深色主题，提供简洁的用户界面，实现快速、安全的文件传输功能。 

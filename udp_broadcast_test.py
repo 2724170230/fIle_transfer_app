@@ -1,4 +1,8 @@
 """
+以下代码及注释全部由AI Agent生成
+"""
+
+"""
 局域网UDP广播测试工具 (UDP Broadcast Test Tool)
 
 该工具用于诊断局域网环境中UDP广播的可用性和网络隔离情况，帮助解决SendNow设备发现功能的问题。

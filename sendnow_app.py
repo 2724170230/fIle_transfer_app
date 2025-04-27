@@ -1,4 +1,8 @@
 """
+以下代码及注释全部由AI Agent生成
+"""
+
+"""
 SendNow应用程序主模块 (Main Application Module)
 
 该模块实现了SendNow文件传输应用的核心功能，包括：
