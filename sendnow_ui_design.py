@@ -470,8 +470,8 @@ class FileListWidget(QListWidget):
         super().__init__(parent)
         self.setStyleSheet(f"""
             QListWidget {{
-                background-color: {INNER_BG};
-                border: none;
+                background-color: #2F3456;  /* 修改为更明显的背景颜色 */
+                border: 1px solid {BORDER_COLOR};  /* 添加轻微边框 */
                 border-radius: 8px;
                 padding: 5px;
             }}
@@ -1414,8 +1414,8 @@ class SendPanel(QWidget):
         # 恢复列表的原始样式
         self.fileList.setStyleSheet(f"""
             QListWidget {{
-                background-color: {INNER_BG};
-                border: none;
+                background-color: #2F3456;  /* 与FileListWidget中相同的背景颜色 */
+                border: 1px solid {BORDER_COLOR};
                 border-radius: 8px;
                 padding: 5px;
             }}
@@ -1446,8 +1446,8 @@ class SendPanel(QWidget):
             # 恢复列表的原始样式
             self.fileList.setStyleSheet(f"""
                 QListWidget {{
-                    background-color: {INNER_BG};
-                    border: none;
+                    background-color: #2F3456;  /* 与FileListWidget中相同的背景颜色 */
+                    border: 1px solid {BORDER_COLOR};
                     border-radius: 8px;
                     padding: 5px;
                 }}
