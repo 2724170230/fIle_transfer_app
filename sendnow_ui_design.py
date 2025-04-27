@@ -1386,7 +1386,7 @@ class SendPanel(QWidget):
             # 拖动时可以更改列表的边框样式而不是原来的提示标签
             self.fileList.setStyleSheet(f"""
                 QListWidget {{
-                    background-color: {INNER_BG};
+                    background-color: #2A3366;  /* 添加更明显的浅蓝色背景颜色 */
                     border: 2px dashed {HIGHLIGHT_COLOR};
                     border-radius: 8px;
                     padding: 5px;
