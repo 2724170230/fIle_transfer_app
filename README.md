@@ -1,6 +1,6 @@
 # SendNow 文件传输工具
 
-基于Python-Qt的局域网文件传输工具，风格参考LocalSend.org。
+基于Python-Qt的局域网文件传输工具
 
 ## 功能特点
 
@@ -45,7 +45,7 @@
 
 5. **运行应用**
    ```cmd
-   python localsend_app.py
+   python sendnow_app.py
    ```
 
 ### macOS安装步骤
@@ -70,7 +70,7 @@
 
 4. **运行应用**
    ```bash
-   python localsend_app.py
+   python sendnow_app.py
    ```
 
 ### Linux安装步骤
@@ -97,7 +97,7 @@
 
 4. **运行应用**
    ```bash
-   python localsend_app.py
+   python sendnow_app.py
    ```
 
 ## 常见问题解决
@@ -140,17 +140,22 @@
 ## 项目结构
 
 ```
-├── localsend_app.py       # 应用主入口
-├── localsend_ui_design.py # UI设计实现
+├── sendnow_app.py         # 应用主入口
+├── sendnow_ui_design.py   # UI设计实现
 ├── network_discovery.py   # 网络设备发现模块
 ├── file_transfer.py       # 文件传输模块
+├── test_modules.py        # 测试模块
+├── udp_broadcast_test.py  # UDP广播测试
+├── demo.py                # 演示脚本
 ├── icons/                 # 图标文件夹
 │   ├── receive.svg        # 接收图标 
 │   ├── send.svg           # 发送图标
-│   └── settings.svg       # 设置图标
+│   ├── settings.svg       # 设置图标
+│   ├── history.svg        # 历史记录图标
+│   ├── trash.svg          # 删除图标
+│   └── sendnow_logo.svg   # 应用图标
+├── transfer/              # 传输文件夹
 ├── requirements.txt       # 项目依赖
-├── Dockerfile             # Docker构建文件
-├── docker-compose.yml     # Docker Compose配置
 └── README.md              # 项目说明
 ```
 
