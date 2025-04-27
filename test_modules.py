@@ -1,4 +1,17 @@
 """
+SendNow文件传输测试模块 (File Transfer Test Module)
+
+该模块用于独立测试SendNow应用的文件传输功能，不依赖于完整的UI界面。
+主要功能：
+- 创建并初始化FileTransferServer和FileTransferClient实例
+- 测试文件发送和接收过程
+- 监控传输状态、进度和结果
+- 自动完成完整的文件传输测试流程
+
+通过该测试模块可以验证文件传输功能的正确性和稳定性，帮助开发者快速诊断传输问题。
+"""
+
+"""
 测试模块化后的文件传输功能
 """
 import os

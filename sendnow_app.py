@@ -1,3 +1,15 @@
+"""
+SendNow应用程序主模块 (Main Application Module)
+
+该模块实现了SendNow文件传输应用的核心功能，包括：
+- SendNowApp类：集成用户界面、网络发现和文件传输的主应用程序类
+- FileReceiveDialog类：文件接收确认对话框
+- 各种事件处理函数：处理设备发现、文件传输、用户交互等
+
+作为应用程序的主要入口点，该模块协调各个功能模块（UI、网络发现、文件传输）之间的交互，
+并提供完整的用户体验流程，实现便捷的局域网文件传输功能。
+"""
+
 import sys
 import os
 import logging

@@ -1,3 +1,19 @@
+"""
+文件传输模块 (File Transfer Module)
+
+该模块实现了基于TCP套接字的文件传输功能，包括：
+- FileTransferServer: 文件传输服务器，用于接收其他设备发送的文件
+- FileTransferClient: 文件传输客户端，用于向其他设备发送文件
+
+特性:
+- 支持文件传输进度监控
+- 支持文件完整性校验(MD5哈希)
+- 支持传输请求确认和拒绝
+- 基于PyQt信号机制的事件通知
+
+作为应用程序的核心组件，提供安全可靠的跨设备文件传输功能。
+"""
+
 import os
 import socket
 import json

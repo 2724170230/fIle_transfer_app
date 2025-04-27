@@ -1,3 +1,24 @@
+"""
+SendNow用户界面设计模块 (UI Design Module)
+
+该模块实现了SendNow应用程序的所有用户界面组件和视觉设计，采用赛博朋克风格的高对比度UI。
+主要组件：
+- MainWindow：应用主窗口
+- ReceivePanel：文件接收面板
+- SendPanel：文件发送面板
+- SettingsPanel：设置面板
+- DynamicLogoWidget：动态Logo组件
+- 各种自定义UI组件：如拖放区域、文件列表、状态面板等
+
+UI设计特点：
+- 现代赛博朋克风格，高对比度配色
+- 响应式布局，适应不同屏幕尺寸
+- 流畅的动画和交互效果
+- 支持文件拖放操作
+
+该模块专注于UI呈现，不包含业务逻辑，可与应用逻辑模块分离使用。
+"""
+
 import sys
 import random
 import hashlib

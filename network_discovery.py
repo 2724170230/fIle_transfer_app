@@ -1,3 +1,20 @@
+"""
+局域网设备发现模块 (Network Discovery Module)
+
+该模块实现了基于UDP广播的局域网设备自动发现功能，包括：
+- DeviceInfo: 设备信息类，存储发现的设备详细信息
+- NetworkDiscovery: 设备发现服务，负责广播本机信息并发现其他设备
+
+特性:
+- 自动发现同一局域网内的其他设备
+- 实时监控设备在线状态
+- 支持设备离线通知
+- 自动清理超时设备
+- 基于PyQt信号机制的事件通知
+
+作为应用程序的网络通信基础，使用户能够在不输入IP地址的情况下发现可用设备。
+"""
+
 import socket
 import json
 import threading
