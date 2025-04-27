@@ -11,126 +11,107 @@
 - 文件传输进度显示
 - 可自定义保存路径
 
-## 安装与运行
+## 安装与运行指南
 
-### 方式一：直接安装运行
-
-#### 环境要求
+### 环境要求
 
 - Python 3.6+
 - PyQt5
 - netifaces
 
-#### 安装依赖
+### Windows安装步骤
 
-```bash
-pip install -r requirements.txt
-```
+1. **安装Python**
+   - 从[Python官网](https://www.python.org/downloads/windows/)下载并安装Python 3.6或更高版本
+   - 安装时勾选"Add Python to PATH"选项
 
-#### 运行应用
+2. **安装C++开发工具**
+   - 某些依赖库需要C++编译环境，请下载安装[Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+   - 安装时选择"Desktop development with C++"工作负载
 
-```bash
-python localsend_app.py
-```
-
-### 方式二：使用Docker运行（推荐）
-
-使用Docker可以在任何支持Docker的操作系统上运行SendNow，无需安装Python或其他依赖。
-
-#### 前提条件
-
-- 安装 [Docker](https://docs.docker.com/get-docker/)
-- 安装 [Docker Compose](https://docs.docker.com/compose/install/)（可选，但推荐）
-- Linux系统需要开启X11转发
-
-#### 使用Docker部署
-
-1. **克隆或下载项目代码**
-
-2. **构建并启动Docker容器**
-
-   使用docker-compose（推荐）:
-   ```bash
-   docker-compose up -d
-   ```
-
-   或者使用Docker命令:
-   ```bash
-   # 构建Docker镜像
-   docker build -t localsend-app .
+3. **创建虚拟环境**
+   ```cmd
+   # 在项目目录中打开命令提示符
+   python -m venv .venv
    
-   # 运行容器
-   docker run -d --name localsend-app \
-     --network host \
-     -v /tmp/.X11-unix:/tmp/.X11-unix \
-     -v $HOME/Downloads:/root/Downloads \
-     -e DISPLAY=$DISPLAY \
-     -e QT_X11_NO_MITSHM=1 \
-     --cap-add NET_ADMIN \
-     --cap-add NET_BROADCAST \
-     localsend-app
+   # 激活虚拟环境
+   .venv\Scripts\activate
    ```
 
-#### 针对不同操作系统的Docker配置
+4. **安装依赖**
+   ```cmd
+   pip install -r requirements.txt
+   ```
 
-##### Linux系统
+5. **运行应用**
+   ```cmd
+   python localsend_app.py
+   ```
 
-1. 允许Docker访问X11显示服务器：
+### macOS安装步骤
+
+1. **安装Python**
+   - 从[Python官网](https://www.python.org/downloads/mac-osx/)下载并安装Python 3.6或更高版本
+   - 或使用Homebrew安装: `brew install python`
+
+2. **创建虚拟环境**
    ```bash
-   xhost +local:docker
+   # 在项目目录中打开终端
+   python3 -m venv .venv
+   
+   # 激活虚拟环境
+   source .venv/bin/activate
    ```
 
-2. 正常启动容器：
+3. **安装依赖**
    ```bash
-   docker-compose up -d
+   pip install -r requirements.txt
    ```
 
-##### macOS系统
-
-1. 安装XQuartz：
+4. **运行应用**
    ```bash
-   brew install --cask xquartz
+   python localsend_app.py
    ```
 
-2. 启动XQuartz并在偏好设置中允许网络连接
+### Linux安装步骤
 
-3. 获取IP地址：
+1. **安装Python和依赖**
    ```bash
-   IP=$(ifconfig en0 | grep inet | awk '$1=="inet" {print $2}')
+   sudo apt update
+   sudo apt install python3 python3-pip python3-venv python3-dev
    ```
 
-4. 设置DISPLAY环境变量：
+2. **创建虚拟环境**
    ```bash
-   DISPLAY=$IP:0
+   # 在项目目录中打开终端
+   python3 -m venv .venv
+   
+   # 激活虚拟环境
+   source .venv/bin/activate
    ```
 
-5. 允许本地连接：
+3. **安装依赖**
    ```bash
-   xhost + $IP
+   pip install -r requirements.txt
    ```
 
-6. 修改docker-compose.yml：
-   ```yaml
-   environment:
-     - DISPLAY=$IP:0
+4. **运行应用**
+   ```bash
+   python localsend_app.py
    ```
 
-##### Windows系统
+## 常见问题解决
 
-1. 安装X服务器，如[VcXsrv](https://sourceforge.net/projects/vcxsrv/)
+1. **Windows: "Microsoft Visual C++ 14.0 is required"错误**
+   - 确保已安装Microsoft C++ Build Tools
+   - 重启电脑后重新尝试安装
 
-2. 启动VcXsrv（设置"Disable access control"）
+2. **macOS: "Could not find a version that satisfies the requirement PyQt5"错误**
+   - 尝试使用以下命令：`pip install PyQt5 --config-settings --confirm-license= --verbose`
 
-3. 获取IP地址：
-   ```powershell
-   $IP = (Get-NetIPAddress | Where-Object {$_.AddressFamily -eq "IPv4" -and $_.IPAddress -notlike "127.*"}).IPAddress
-   ```
-
-4. 修改docker-compose.yml：
-   ```yaml
-   environment:
-     - DISPLAY=$IP:0.0
-   ```
+3. **权限错误**
+   - Windows: 以管理员身份运行命令提示符
+   - macOS/Linux: 使用`sudo`或检查文件夹权限
 
 ## 使用说明
 

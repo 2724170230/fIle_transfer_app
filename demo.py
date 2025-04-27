@@ -1,6 +1,6 @@
 # SendNow - 局域网文件传输工具 (Demo)
 import sys
-from localsend_ui_design import MainWindow
+from sendnow_ui_design import MainWindow
 from PyQt5.QtWidgets import QApplication
 
 if __name__ == "__main__":
