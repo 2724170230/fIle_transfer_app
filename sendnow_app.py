@@ -11,9 +11,9 @@ from PyQt5.QtGui import QIcon, QFont
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("SendNowApp")
 
-from localsend_ui_design import MainWindow, DeviceNameGenerator
+from sendnow_ui_design import MainWindow, DeviceNameGenerator
 from network_discovery import NetworkDiscovery
-from file_transfer import FileTransferServer, FileTransferClient
+from transfer import FileTransferServer, FileTransferClient
 
 def create_message_box(parent, icon, title, text):
     """创建高对比度的消息框"""

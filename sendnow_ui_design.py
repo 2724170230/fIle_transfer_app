@@ -1462,7 +1462,7 @@ class SettingsPanel(QWidget):
         savePathLabel = QLabel("默认保存路径:")
         savePathLabel.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 14px;")
         
-        self.savePathEdit = QLabel("/Users/Documents/LocalSend")
+        self.savePathEdit = QLabel("/Users/Documents/SendNow")
         self.savePathEdit.setStyleSheet(f"""
             background-color: {INNER_BG};
             color: {TEXT_COLOR};
