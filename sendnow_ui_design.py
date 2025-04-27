@@ -387,47 +387,43 @@ class FileItemWidget(QWidget):
     """文件项部件，包含文件名和删除按钮"""
     deleteClicked = pyqtSignal(QListWidgetItem)
     
+    # 静态类变量，用于缓存删除按钮图标
+    _deleteIcon = None
+    
+    @classmethod
+    def ensureIconLoaded(cls):
+        """确保删除图标已加载（静态方法）"""
+        if cls._deleteIcon is None:
+            # 初始化图标
+            trash_icon_path = "icons/trash.svg"
+            if os.path.exists(trash_icon_path):
+                cls._deleteIcon = QIcon(trash_icon_path)
+            else:
+                # 如果图标不存在，创建一个
+                cls._deleteIcon = QIcon()
+    
     def __init__(self, file_name, size_str, full_path=None, parent=None):
         super().__init__(parent)
         
-        # 使用更高效的布局
-        layout = QHBoxLayout(self)
+        # 确保图标已加载
+        self.ensureIconLoaded()
+        
+        # 使用更轻量级的布局策略
+        layout = QVBoxLayout(self)  # 改为垂直布局
         layout.setContentsMargins(5, 5, 5, 5)
-        layout.setSpacing(5)
+        layout.setSpacing(0)  # 删除垂直空间，减少行距
         
-        # 创建内容容器（包含文件名和路径）
-        contentWidget = QWidget()
-        contentLayout = QVBoxLayout(contentWidget)
-        contentLayout.setContentsMargins(0, 0, 0, 0)
-        contentLayout.setSpacing(0)
+        # 顶部布局：文件名和删除按钮
+        topLayout = QHBoxLayout()
+        topLayout.setSpacing(5)  # 保持合适的水平间距
         
-        # 文件名和大小标签
+        # 文件名和大小标签 - 使用简单标签减少开销
         self.fileLabel = QLabel(f"{file_name} ({size_str})")
         self.fileLabel.setStyleSheet(f"color: {TEXT_COLOR}; font-size: 13px; font-weight: bold;")
-        self.fileLabel.setTextFormat(Qt.PlainText)  # 使用PlainText格式提高渲染性能
         
-        # 文件路径标签 - 只在必要时显示
-        self.pathLabel = QLabel()
-        self.pathLabel.setStyleSheet(f"color: {SECONDARY_TEXT_COLOR}; font-size: 11px;")
-        self.pathLabel.setTextFormat(Qt.PlainText)  # 使用PlainText格式提高渲染性能
-        
-        # 如果路径不太长，直接显示
-        if full_path and len(full_path) < 50:
-            self.pathLabel.setText(full_path)
-        else:
-            # 对于很长的路径，截断显示以提高性能
-            self.pathLabel.setText(os.path.dirname(full_path)[:47] + "..." if full_path else "")
-        
-        # 将路径存储为属性以便需要时访问
-        self.setProperty("full_path", full_path)
-        
-        # 添加到内容布局
-        contentLayout.addWidget(self.fileLabel)
-        contentLayout.addWidget(self.pathLabel)
-        
-        # 删除按钮 - 使用固定大小
+        # 删除按钮 - 使用预加载图标
         self.deleteButton = QPushButton()
-        self.deleteButton.setIcon(QIcon("icons/trash.svg"))
+        self.deleteButton.setIcon(self._deleteIcon)  # 使用缓存的图标
         self.deleteButton.setIconSize(QSize(16, 16))
         self.deleteButton.setFixedSize(24, 24)
         self.deleteButton.setCursor(Qt.PointingHandCursor)
@@ -437,6 +433,7 @@ class FileItemWidget(QWidget):
                 border: none;
                 border-radius: 12px;
                 padding: 3px;
+                color: white;
             }}
             QPushButton:hover {{
                 background-color: rgba(255, 255, 255, 0.1);
@@ -449,13 +446,25 @@ class FileItemWidget(QWidget):
         # 删除按钮点击事件
         self.deleteButton.clicked.connect(self.onDeleteClicked)
         
-        # 添加到主布局 - 内容区域自动扩展，删除按钮固定尺寸
-        layout.addWidget(contentWidget, 1)
-        layout.addWidget(self.deleteButton, 0)
+        # 添加到顶部布局
+        topLayout.addWidget(self.fileLabel, 1)  # 1表示伸展因子
+        topLayout.addWidget(self.deleteButton, 0, Qt.AlignRight)  # 右对齐
         
-        # 减少不必要的属性设置
-        self.setAttribute(Qt.WA_StyledBackground, False)
-        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        # 文件路径标签
+        self.pathLabel = QLabel(full_path if full_path else "")
+        self.pathLabel.setStyleSheet(f"color: {SECONDARY_TEXT_COLOR}; font-size: 11px; margin-top: -5px;")  # 添加负的上边距
+        self.pathLabel.setWordWrap(True)
+        self.pathLabel.setTextInteractionFlags(Qt.TextSelectableByMouse)  # 允许用户选择文本
+        
+        # 添加到主布局
+        layout.addLayout(topLayout)
+        layout.addWidget(self.pathLabel)
+        
+        # 设置整个部件的样式
+        self.setAttribute(Qt.WA_OpaquePaintEvent, True)  # 减少重绘
+        self.setStyleSheet(f"""
+            background-color: transparent;
+        """)
     
     def onDeleteClicked(self):
         """删除按钮被点击"""
@@ -470,10 +479,13 @@ class FileListWidget(QListWidget):
         super().__init__(parent)
         self.setStyleSheet(f"""
             QListWidget {{
-                background-color: #3D4A80;  /* 修改为更明显的蓝紫色背景 */
-                border: 1px solid {BORDER_COLOR};  /* 添加轻微边框 */
+                background-color: {INNER_BG};
+                border: none;
                 border-radius: 8px;
                 padding: 5px;
+            }}
+            QListWidget[dragging="true"] {{
+                border: 2px dashed {HIGHLIGHT_COLOR};
             }}
             QListWidget::item {{
                 background-color: {LIST_ITEM_BG};
@@ -499,18 +511,17 @@ class FileListWidget(QListWidget):
         # 添加空列表提示
         self.setPlaceholderText("拖动文件至此处")
         
-        # 设置虚拟滚动模式，提高大量文件时的性能
-        self.setVerticalScrollMode(QListWidget.ScrollPerPixel)
-        
-        # 优化列表视图性能设置
-        self.setUniformItemSizes(True)  # 假定所有项大小相似，提高性能
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # 禁用水平滚动条
-        
-        # 减少重绘频率
+        # 优化性能设置
+        self.setUniformItemSizes(True)  # 告诉Qt所有项目大小相同，加快渲染
+        self.setVerticalScrollMode(QListWidget.ScrollPerPixel)  # 平滑滚动
+        self.setAttribute(Qt.WA_OpaquePaintEvent, True)  # 减少重绘
         self.viewport().setAttribute(Qt.WA_OpaquePaintEvent, True)
         
-        # 将ScrollMode设置为ScrollPerPixel，使滚动更加平滑
-        self.setVerticalScrollMode(QListWidget.ScrollPerPixel)
+        # 使用虚拟模式提高大量文件时的性能
+        self.setViewMode(QListWidget.ListMode)
+        
+        # 初始化拖放状态
+        self.setProperty("dragging", False)
     
     def setPlaceholderText(self, text):
         """设置空列表时的占位文本"""
@@ -1297,66 +1308,70 @@ class SendPanel(QWidget):
             self.addFilesToList(files)
     
     def addFilesToList(self, file_paths):
-        """添加文件到列表，优化性能"""
-        # 暂时禁用UI更新，提高性能
+        """添加文件到列表"""
+        # 先禁用界面刷新，减少视觉更新次数
         self.fileList.setUpdatesEnabled(False)
-        self.fileList.setSortingEnabled(False)
         
-        # 开始批量添加前先记录原来的计数
-        original_count = self.fileList.count()
+        # 如果文件太多，显示进度对话框
+        show_progress = len(file_paths) > 10
+        progress_count = 0
         
         try:
-            # 限制单次添加文件数量，避免界面卡顿
-            max_files = 100
-            if len(file_paths) > max_files:
-                file_paths = file_paths[:max_files]
-            
-            for path in file_paths:
-                # 提取文件名，不包含路径
-                file_name = os.path.basename(path)
+            # 预先处理所有文件信息并批量添加
+            batch_size = 20  # 每批处理的文件数
+            for i in range(0, len(file_paths), batch_size):
+                batch = file_paths[i:i+batch_size]
                 
-                # 创建包含文件名和大小的条目
-                try:
-                    size = os.path.getsize(path)
-                    if size < 1024:
-                        size_str = f"{size} B"
-                    elif size < 1024 * 1024:
-                        size_str = f"{size/1024:.1f} KB"
-                    else:
-                        size_str = f"{size/(1024*1024):.1f} MB"
-                except:
-                    size_str = "未知大小"
+                for path in batch:
+                    # 提取文件名，不包含路径
+                    file_name = os.path.basename(path)
+                    
+                    # 创建包含文件名和大小的条目
+                    try:
+                        size = os.path.getsize(path)
+                        if size < 1024:
+                            size_str = f"{size} B"
+                        elif size < 1024 * 1024:
+                            size_str = f"{size/1024:.1f} KB"
+                        else:
+                            size_str = f"{size/(1024*1024):.1f} MB"
+                    except:
+                        size_str = "未知大小"
+                    
+                    # 创建自定义列表项
+                    item = QListWidgetItem(self.fileList)
+                    item.setData(Qt.UserRole, path)  # 存储完整路径
+                    
+                    # 创建自定义部件
+                    file_widget = FileItemWidget(file_name, size_str, path)
+                    file_widget.setProperty("list_item", item)  # 存储列表项引用
+                    file_widget.deleteClicked.connect(self.removeFileItem)
+                    
+                    # 设置列表项尺寸
+                    item.setSizeHint(file_widget.sizeHint())
+                    
+                    # 将自定义部件添加到列表项
+                    self.fileList.addItem(item)
+                    self.fileList.setItemWidget(item, file_widget)
+                    
+                    progress_count += 1
+                    if show_progress and progress_count % 5 == 0:
+                        # 每5个文件处理一次事件循环，保持UI响应
+                        QApplication.processEvents()
                 
-                # 创建列表项并设置数据
-                item = QListWidgetItem(self.fileList)
-                item.setData(Qt.UserRole, path)  # 存储完整路径
-                
-                # 创建自定义部件
-                file_widget = FileItemWidget(file_name, size_str, path)
-                file_widget.setProperty("list_item", item)  # 存储列表项引用
-                file_widget.deleteClicked.connect(self.removeFileItem)
-                
-                # 设置列表项尺寸
-                item.setSizeHint(file_widget.sizeHint())
-                
-                # 将自定义部件添加到列表项
-                self.fileList.addItem(item)
-                self.fileList.setItemWidget(item, file_widget)
+                # 每批次处理后更新一次，以保持UI响应
+                QApplication.processEvents()
         finally:
-            # 恢复UI更新
+            # 重新启用界面刷新
             self.fileList.setUpdatesEnabled(True)
             
-            # 如果添加了新文件，选择第一个
-            if self.fileList.count() > original_count:
-                self.fileList.setCurrentRow(0)
-            
-            # 更新按钮状态
-            has_files = self.fileList.count() > 0
-            self.clearAllButton.setEnabled(has_files)
-            
-            # 发送按钮状态由文件选择状态控制
-            selected_items = self.fileList.selectedItems()
-            self.sendButton.setEnabled(len(selected_items) > 0)
+        # 启用清除按钮（只要有文件就启用）
+        has_files = self.fileList.count() > 0
+        self.clearAllButton.setEnabled(has_files)
+        
+        # 发送按钮状态由文件选择状态控制
+        selected_items = self.fileList.selectedItems()
+        self.sendButton.setEnabled(len(selected_items) > 0)
     
     def removeFileItem(self, item):
         """从列表中移除文件项"""
@@ -1383,59 +1398,17 @@ class SendPanel(QWidget):
         """拖动进入事件"""
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
-            # 拖动时可以更改列表的边框样式而不是原来的提示标签
-            self.fileList.setStyleSheet(f"""
-                QListWidget {{
-                    background-color: #2A3366;  /* 添加更明显的浅蓝色背景颜色 */
-                    border: 2px dashed {HIGHLIGHT_COLOR};
-                    border-radius: 8px;
-                    padding: 5px;
-                }}
-                QListWidget::item {{
-                    background-color: {LIST_ITEM_BG};
-                    border-radius: 6px;
-                    margin: 2px 0px;
-                    padding: 0px;
-                    color: {TEXT_COLOR};
-                }}
-                QListWidget::item:hover {{
-                    background-color: {QColor(LIST_ITEM_BG).lighter(115).name()};
-                }}
-                QListWidget::item:selected {{
-                    background-color: {QColor(HIGHLIGHT_COLOR).darker(120).name()};
-                    color: {TEXT_COLOR};
-                    border: none;
-                    font-weight: bold;
-                }}
-            """)
+            # 只更改边框样式，而不重新设置整个样式表
+            self.fileList.setProperty("dragging", True)
+            self.fileList.style().unpolish(self.fileList)
+            self.fileList.style().polish(self.fileList)
     
     def dragLeaveEvent(self, event):
         """拖动离开事件"""
-        # 恢复列表的原始样式
-        self.fileList.setStyleSheet(f"""
-            QListWidget {{
-                background-color: #3D4A80;  /* 与FileListWidget中相同的背景颜色 */
-                border: 1px solid {BORDER_COLOR};
-                border-radius: 8px;
-                padding: 5px;
-            }}
-            QListWidget::item {{
-                background-color: {LIST_ITEM_BG};
-                border-radius: 6px;
-                margin: 2px 0px;
-                padding: 0px;
-                color: {TEXT_COLOR};
-            }}
-            QListWidget::item:hover {{
-                background-color: {QColor(LIST_ITEM_BG).lighter(115).name()};
-            }}
-            QListWidget::item:selected {{
-                background-color: {QColor(HIGHLIGHT_COLOR).darker(120).name()};
-                color: {TEXT_COLOR};
-                border: none;
-                font-weight: bold;
-            }}
-        """)
+        # 恢复原始边框样式
+        self.fileList.setProperty("dragging", False)
+        self.fileList.style().unpolish(self.fileList)
+        self.fileList.style().polish(self.fileList)
     
     def dropEvent(self, event):
         """放置事件"""
@@ -1443,32 +1416,12 @@ class SendPanel(QWidget):
             urls = event.mimeData().urls()
             file_paths = [url.toLocalFile() for url in urls]
             self.addFilesToList(file_paths)
-            # 恢复列表的原始样式
-            self.fileList.setStyleSheet(f"""
-                QListWidget {{
-                    background-color: #3D4A80;  /* 与FileListWidget中相同的背景颜色 */
-                    border: 1px solid {BORDER_COLOR};
-                    border-radius: 8px;
-                    padding: 5px;
-                }}
-                QListWidget::item {{
-                    background-color: {LIST_ITEM_BG};
-                    border-radius: 6px;
-                    margin: 2px 0px;
-                    padding: 0px;
-                    color: {TEXT_COLOR};
-                }}
-                QListWidget::item:hover {{
-                    background-color: {QColor(LIST_ITEM_BG).lighter(115).name()};
-                }}
-                QListWidget::item:selected {{
-                    background-color: {QColor(HIGHLIGHT_COLOR).darker(120).name()};
-                    color: {TEXT_COLOR};
-                    border: none;
-                    font-weight: bold;
-                }}
-            """)
             
+            # 恢复原始边框样式
+            self.fileList.setProperty("dragging", False)
+            self.fileList.style().unpolish(self.fileList)
+            self.fileList.style().polish(self.fileList)
+    
     def simulateDeviceFound(self):
         """模拟发现设备"""
         # 不再添加模拟设备
@@ -1478,33 +1431,10 @@ class SendPanel(QWidget):
         self.searchStatusLabel.setText(f"找到 {len(devices)} 个设备")
 
     def onFileSelectionChanged(self):
-        """处理文件选择变化事件 - 优化性能"""
-        # 使用一个标志来防止重复处理
-        if hasattr(self, '_is_updating_selection') and self._is_updating_selection:
-            return
-            
-        self._is_updating_selection = True
-        try:
-            # 减少UI更新
-            self.setUpdatesEnabled(False)
-            
-            # 高效获取选中项数量而不是整个列表
-            selected_count = 0
-            for i in range(self.fileList.count()):
-                if self.fileList.item(i).isSelected():
-                    selected_count += 1
-                    if selected_count > 0:  # 一旦发现有选中项就可以停止计数
-                        break
-            
-            # 只在状态变化时更新UI
-            current_enabled = self.sendButton.isEnabled()
-            should_enable = selected_count > 0
-            
-            if current_enabled != should_enable:
-                self.sendButton.setEnabled(should_enable)
-        finally:
-            self.setUpdatesEnabled(True)
-            self._is_updating_selection = False
+        """处理文件选择变化事件"""
+        # 只有在有文件被选中时才启用发送按钮
+        selected_items = self.fileList.selectedItems()
+        self.sendButton.setEnabled(len(selected_items) > 0)
 
 class SettingsPanel(QWidget):
     """设置界面"""
